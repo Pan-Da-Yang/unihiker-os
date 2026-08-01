@@ -9,6 +9,7 @@
   python main.py            # 行空板模式，桌面点「游戏中心」进入
   python gamecenter.py      # 单独调试游戏中心（开发机大窗口）
 """
+import math
 import random
 import time
 import tkinter as tk
@@ -80,17 +81,19 @@ class MiniGame(tk.Toplevel):
             s.theme_use("clam")
         except Exception:
             pass
+        # 小屏用更小的字体和更紧的 padding，避免底部按钮行占太多高度
+        btn_font = FONT_SMALL if BOARD else FONT_NORMAL
         s.configure("UH.TButton", background=ACCENT, foreground=ON_ACCENT,
-                    font=FONT_NORMAL, borderwidth=0,
-                    padding=(2, 2) if BOARD else 6)
+                    font=btn_font, borderwidth=0,
+                    padding=(2, 1) if BOARD else 6)
         s.map("UH.TButton", background=[("active", ACCENT2)])
         s.configure("UH.Danger.TButton", background=DANGER, foreground="#ffffff",
-                    font=FONT_NORMAL, borderwidth=0,
-                    padding=(2, 2) if BOARD else 6)
+                    font=btn_font, borderwidth=0,
+                    padding=(2, 1) if BOARD else 6)
         s.map("UH.Danger.TButton", background=[("active", "#b00020")])
         s.configure("UH.Num.TButton", background=SURFACE2, foreground=TEXT,
-                    font=FONT_NORMAL, borderwidth=0,
-                    padding=(2, 2) if BOARD else 6)
+                    font=btn_font, borderwidth=0,
+                    padding=(2, 1) if BOARD else 6)
         s.map("UH.Num.TButton", background=[("active", HOVER)])
 
     def _build(self):
@@ -180,13 +183,14 @@ class GameCenter(tk.Toplevel):
             s.theme_use("clam")
         except Exception:
             pass
+        btn_font = FONT_SMALL if BOARD else FONT_NORMAL
         s.configure("UH.TButton", background=ACCENT, foreground=ON_ACCENT,
-                    font=FONT_NORMAL, borderwidth=0,
-                    padding=(2, 2) if BOARD else 6)
+                    font=btn_font, borderwidth=0,
+                    padding=(2, 1) if BOARD else 6)
         s.map("UH.TButton", background=[("active", ACCENT2)])
         s.configure("UH.Danger.TButton", background=DANGER, foreground="#ffffff",
-                    font=FONT_NORMAL, borderwidth=0,
-                    padding=(2, 2) if BOARD else 6)
+                    font=btn_font, borderwidth=0,
+                    padding=(2, 1) if BOARD else 6)
         s.map("UH.Danger.TButton", background=[("active", "#b00020")])
 
     def _build(self):
@@ -471,24 +475,30 @@ class GameSpin(MiniGame):
         if self.spin:
             return
         self.spin = True
-        self.target = random.randint(0, 359)
+        self._speed = 22
+        self._steps = random.randint(70, 130)
+        self.result_text = ""
         self._tick()
 
     def _tick(self):
-        if not self.winfo_exists():
+        if not self.winfo_exists() or not self._alive:
             return
-        if not self._alive:
-            return
-        self.angle = (self.angle + 12) % 360
+        self.angle = (self.angle + self._speed) % 360
         self._draw()
-        if self.spin:
+        self._steps -= 1
+        if self._steps > 0:
+            # 最后 30 步逐渐减速
+            if self._steps < 30 and self._steps % 3 == 0:
+                self._speed = max(1, self._speed - 1)
             self.after(30, self._tick)
         else:
+            self.spin = False
             n = len(self.prizes)
-            idx = int(((-self.angle) % 360) / 360 * n) % n
-            self.cv.create_text(_cw() / 2, 20,
-                                text=f"结果：{self.prizes[idx]}",
-                                fill=ACCENT, font=FONT_NORMAL)
+            # 指针在正上方（270°），计算当前指向的扇区
+            ptr = (270 - self.angle) % 360
+            idx = int(ptr / 360 * n) % n
+            self.result_text = f"结果：{self.prizes[idx]}"
+            self._draw()
 
     def _draw(self):
         cv = self.cv
@@ -505,15 +515,18 @@ class GameSpin(MiniGame):
             a1 = self.angle + (i + 1) * 360 / n
             cv.create_arc(cx - r, cy - r, cx + r, cy + r, start=a0, extent=(a1 - a0),
                           fill=cols[i % len(cols)], outline=BG)
-            mid = (a0 + a1) / 2
-            mx = cx + (r * 0.55) * 0.707 * (1 if mid % 360 < 180 else -1)
-            my = cy - (r * 0.55) * 0.707 * (1 if 90 < mid % 360 < 270 else -1)
+            mid = math.radians((a0 + a1) / 2)
+            mx = cx + (r * 0.55) * math.cos(mid)
+            my = cy + (r * 0.55) * math.sin(mid)
             cv.create_text(mx, my, text=self.prizes[i], fill=TEXT,
                            font=FONT_SMALL)
         cv.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, fill=SURFACE2,
                        outline=TEXT)
         cv.create_polygon(cx, cy - r - 8, cx - 8, cy - r + 6, cx + 8, cy - r + 6,
                           fill=DANGER, outline=DANGER)
+        if self.result_text:
+            cv.create_text(w / 2, 20, text=self.result_text,
+                           fill=ACCENT, font=FONT_NORMAL)
 
 
 @_reg
@@ -753,11 +766,15 @@ class GameConnect4(MiniGame):
                         self.over = True
                     else:
                         self._ai()
+                        if self._win(2):
+                            self.over = True
+                        elif all(self.board[0][c] for c in range(self.cols)):
+                            self.over = True
                     self._draw()
                     return
 
     def _ai(self):
-        # 先堵后攻再随机
+        # 1) 能赢直接赢
         for c in range(self.cols):
             r = self._free(c)
             if r is None:
@@ -766,6 +783,7 @@ class GameConnect4(MiniGame):
             if self._win(2):
                 return
             self.board[r][c] = 0
+        # 2) 必须堵玩家
         for c in range(self.cols):
             r = self._free(c)
             if r is None:
@@ -775,7 +793,9 @@ class GameConnect4(MiniGame):
                 self.board[r][c] = 2
                 return
             self.board[r][c] = 0
-        for c in range(self.cols):
+        # 3) 优先占中列，其次随机
+        order = sorted(range(self.cols), key=lambda c: abs(c - self.cols // 2))
+        for c in order:
             r = self._free(c)
             if r is not None:
                 self.board[r][c] = 2
@@ -1143,17 +1163,10 @@ class GameSokoban(MiniGame):
     GAME_NAME = "推箱子"
     GAME_CAT = "棋盘"
 
-    LEVEL = [
-        "#######",
-        "#  .  #",
-        "#  $  #",
-        "#  @  #",
-        "#  .  #",
-        "#######",
-    ]
-
     def _build(self):
-        self.map = [list(row) for row in self.LEVEL]
+        self.rows = self.cols = 8
+        self.boxes = 3
+        self._gen()
         self.cv = self._make_canvas()
         nav = tk.Frame(self.body, bg=BG)
         nav.pack(fill=tk.X)
@@ -1161,10 +1174,94 @@ class GameSokoban(MiniGame):
             ttk.Button(nav, text=t, style="UH.TButton",
                        command=lambda x=d: self._move(x)).pack(
                 side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(nav, text="重开", style="UH.TButton",
+                   command=self._reset).pack(side=tk.LEFT, expand=True,
+                                             fill=tk.X, padx=2)
         self.bind("<Up>", lambda e: self._move((0, -1)))
         self.bind("<Down>", lambda e: self._move((0, 1)))
         self.bind("<Left>", lambda e: self._move((-1, 0)))
         self.bind("<Right>", lambda e: self._move((1, 0)))
+        self._draw()
+
+    def _gen(self):
+        # 生成可解关卡：从解状态反向随机拉动箱子
+        r, c = self.rows, self.cols
+        self.map = [["#"] * c for _ in range(r)]
+        for y in range(1, r - 1):
+            for x in range(1, c - 1):
+                self.map[y][x] = " "
+        # 内部随机墙
+        inner = [(y, x) for y in range(2, r - 2) for x in range(2, c - 2)]
+        random.shuffle(inner)
+        for y, x in inner[:5]:
+            self.map[y][x] = "#"
+
+        floors = set((y, x) for y in range(1, r - 1) for x in range(1, c - 1)
+                     if self.map[y][x] == " ")
+        targets = random.sample(sorted(floors), self.boxes)
+        target_set = set(targets)
+        # 箱子初始放在目标上
+        boxes = set(targets)
+        # 玩家放在某个目标旁边
+        ty, tx = targets[0]
+        adj = [(ty + dy, tx + dx) for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0))
+               if (ty + dy, tx + dx) in floors]
+        player = random.choice(adj)
+
+        def is_floor(p):
+            return p in floors and p not in boxes
+
+        def render():
+            m = [["#"] * c for _ in range(r)]
+            for y in range(r):
+                for x in range(c):
+                    if (y, x) not in floors:
+                        continue
+                    p = (y, x)
+                    on_target = p in target_set
+                    has_box = p in boxes
+                    is_player = p == player
+                    if is_player and has_box:
+                        # 不应当发生
+                        m[y][x] = "+" if on_target else "@"
+                    elif is_player:
+                        m[y][x] = "+" if on_target else "@"
+                    elif has_box:
+                        m[y][x] = "*" if on_target else "$"
+                    elif on_target:
+                        m[y][x] = "."
+                    else:
+                        m[y][x] = " "
+            return m
+
+        # 反向拉动 30~50 次
+        for _ in range(random.randint(30, 50)):
+            moves = []
+            for b in boxes:
+                by, bx = b
+                for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                    # 反向拉：箱子从 b 退到 b - (dy,dx)，玩家站到 b
+                    nby, nbx = by - dy, bx - dx
+                    pny, pnx = by + dy, bx + dx
+                    nb = (nby, nbx)
+                    np_pos = (by, bx)
+                    old_player_pos = (pny, pnx)
+                    # 新箱子位置必须是地板，玩家新位置是原箱子位置（当前是箱子，反向时先空出），
+                    # 玩家原来的位置要空出来给移动路径
+                    if nb in floors and nb not in boxes and nb != player:
+                        if old_player_pos in floors and old_player_pos not in boxes:
+                            moves.append((b, nb, np_pos, old_player_pos))
+            if not moves:
+                break
+            b, nb, np_pos, old_player_pos = random.choice(moves)
+            boxes.remove(b)
+            boxes.add(nb)
+            player = np_pos
+
+        self.map = render()
+
+    def _reset(self):
+        self._gen()
         self._draw()
 
     def _find_player(self):
@@ -1192,10 +1289,7 @@ class GameSokoban(MiniGame):
         self._draw()
 
     def _win(self):
-        return self._count() == 0
-
-    def _count(self):
-        return sum(row.count("$") for row in self.map)
+        return not any("$" in row for row in self.map)
 
     def _draw(self):
         cv = self.cv
@@ -1214,25 +1308,39 @@ class GameSokoban(MiniGame):
                 if v == "#":
                     cv.create_rectangle(x, y, x + cell, y + cell, fill=SURFACE2,
                                         outline=MUTED)
-                elif v in (".", "*", "+"):
-                    cv.create_rectangle(x, y, x + cell, y + cell, fill=BG,
-                                        outline=ACCENT)
-                    if v == "*":
-                        cv.create_oval(x + cell * 0.2, y + cell * 0.2,
-                                       x + cell * 0.8, y + cell * 0.8,
-                                       fill=ACCENT, outline=ACCENT)
-                    elif v == "+":
+                elif v in (" ", "@"):
+                    fill = BG if v == " " else None
+                    if fill:
+                        cv.create_rectangle(x, y, x + cell, y + cell, fill=fill,
+                                            outline=MUTED)
+                    else:
+                        cv.create_rectangle(x, y, x + cell, y + cell, fill=BG,
+                                            outline=MUTED)
+                    if v == "@":
                         cv.create_oval(x + cell * 0.25, y + cell * 0.25,
                                        x + cell * 0.75, y + cell * 0.75,
                                        fill=ACCENT2, outline=ACCENT2)
+                elif v in (".", "+", "*"):
+                    # 目标点用高亮底色 + 红色靶心，非常明显
+                    cv.create_rectangle(x, y, x + cell, y + cell, fill="#ffe0b2",
+                                        outline=ACCENT2, width=2)
+                    cv.create_oval(x + cell * 0.35, y + cell * 0.35,
+                                   x + cell * 0.65, y + cell * 0.65,
+                                   fill=DANGER, outline=DANGER)
+                    if v == "+":
+                        cv.create_oval(x + cell * 0.25, y + cell * 0.25,
+                                       x + cell * 0.75, y + cell * 0.75,
+                                       fill=TEXT, outline=TEXT)
+                    elif v == "*":
+                        cv.create_oval(x + cell * 0.2, y + cell * 0.2,
+                                       x + cell * 0.8, y + cell * 0.8,
+                                       fill=ACCENT, outline=ACCENT)
                 elif v == "$":
+                    cv.create_rectangle(x, y, x + cell, y + cell, fill=BG,
+                                        outline=MUTED)
                     cv.create_oval(x + cell * 0.2, y + cell * 0.2,
                                    x + cell * 0.8, y + cell * 0.8,
                                    fill=DANGER, outline=DANGER)
-                elif v == "@":
-                    cv.create_oval(x + cell * 0.25, y + cell * 0.25,
-                                   x + cell * 0.75, y + cell * 0.75,
-                                   fill=ACCENT2, outline=ACCENT2)
         cv.create_text(w / 2, 14,
                        text="把箱子推到目标点" + (" 完成！" if self._win()
                                                  else ""),
@@ -1348,8 +1456,14 @@ class GameMaze(MiniGame):
 
     def _build(self):
         self.n = 11
+        self._reset()
+
+    def _reset(self):
         self.grid = self._gen()
         self.px, self.py = 1, 1
+        if hasattr(self, "cv"):
+            self._draw()
+            return
         self.cv = self._make_canvas()
         self.cv.bind("<Button-1>", self._tap)
         nav = tk.Frame(self.body, bg=BG)
@@ -1358,6 +1472,9 @@ class GameMaze(MiniGame):
             ttk.Button(nav, text=t, style="UH.TButton",
                        command=lambda x=d: self._move(x)).pack(
                 side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(nav, text="重开", style="UH.TButton",
+                   command=self._reset).pack(side=tk.LEFT, expand=True,
+                                             fill=tk.X, padx=2)
         self.bind("<Up>", lambda e: self._move((0, -1)))
         self.bind("<Down>", lambda e: self._move((0, 1)))
         self.bind("<Left>", lambda e: self._move((-1, 0)))
@@ -1618,14 +1735,34 @@ class GameTetris(MiniGame):
         nav = tk.Frame(self.body, bg=BG)
         nav.pack(fill=tk.X)
         for t, cmd in [("←", lambda: self._mv(-1)), ("→", lambda: self._mv(1)),
-                       ("↓", self._down), ("旋转", self._rot)]:
+                       ("↓", self._down), ("↻", self._rot)]:
             ttk.Button(nav, text=t, style="UH.TButton", command=cmd).pack(
                 side=tk.LEFT, expand=True, fill=tk.X, padx=2)
         self.bind("<Left>", lambda e: self._mv(-1))
         self.bind("<Right>", lambda e: self._mv(1))
         self.bind("<Down>", lambda e: self._down())
         self.bind("<Up>", lambda e: self._rot())
+        # 在棋盘上滑动手势：上滑旋转，左右下滑移动/下落
+        self.cv.bind("<ButtonPress-1>", self._swipe_start)
+        self.cv.bind("<ButtonRelease-1>", self._swipe_end)
         self._loop()
+
+    def _swipe_start(self, e):
+        self._sx, self._sy = e.x, e.y
+
+    def _swipe_end(self, e):
+        if not self.alive or not hasattr(self, "_sx"):
+            return
+        dx, dy = e.x - self._sx, e.y - self._sy
+        if abs(dx) < 18 and abs(dy) < 18:
+            return
+        if abs(dy) > abs(dx):
+            if dy < 0:
+                self._rot()
+            else:
+                self._down()
+        else:
+            self._mv(1 if dx > 0 else -1)
 
     def _new(self):
         self.shape = random.choice(list(self.SHAPES))
@@ -1733,8 +1870,8 @@ class GameBreakout(MiniGame):
 
     def _build(self):
         self.cv = self._make_canvas()
-        w = self._cw()
-        h = self._ch()
+        w = _cw()
+        h = _ch()
         self.W, self.H = w, h
         self.px = w / 2
         self.pw = 44
@@ -1820,8 +1957,8 @@ class GamePong(MiniGame):
 
     def _build(self):
         self.cv = self._make_canvas()
-        w = self._cw()
-        h = self._ch()
+        w = _cw()
+        h = _ch()
         self.W, self.H = w, h
         self.px = w / 2
         self.pw = 44
@@ -1899,8 +2036,8 @@ class GameCatch(MiniGame):
 
     def _build(self):
         self.cv = self._make_canvas()
-        w = self._cw()
-        h = self._ch()
+        w = _cw()
+        h = _ch()
         self.W, self.H = w, h
         self.px = w / 2
         self.pw = 40
@@ -1968,8 +2105,8 @@ class GameShoot(MiniGame):
 
     def _build(self):
         self.cv = self._make_canvas()
-        w = self._cw()
-        h = self._ch()
+        w = _cw()
+        h = _ch()
         self.W, self.H = w, h
         self.px = w / 2
         self.bullets = []
