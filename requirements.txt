@@ -1,0 +1,11 @@
+# 行空板 OS 全家桶 - 依赖
+# 在行空板上安装：  pip install -r requirements.txt
+# 开发机（Windows/Linux）同样适用。
+
+# 图像与视频处理（图片查看器 / 视频播放器核心）
+Pillow>=9.0.0
+opencv-python-headless>=4.5.0
+
+# 注：行空板出厂系统已内置 tkinter（Python 标准库），无需额外安装。
+# 若缺少 Pillow / OpenCV，运行对应 App 时会给出友好提示。
+# 游戏中心为纯 tkinter 实现，无需任何第三方依赖。
