@@ -843,7 +843,7 @@ class GameMines(MiniGame):
         self.rev = [[False] * self.n for _ in range(self.n)]
         self.flag = [[False] * self.n for _ in range(self.n)]
         self.over = False
-        self._place()
+        self.started = False
         self.sel = None
         self.cv = self._make_canvas()
         self.cv.bind("<Button-1>", self._tap)
@@ -860,8 +860,10 @@ class GameMines(MiniGame):
                                              fill=tk.X, padx=2)
         self._draw()
 
-    def _place(self):
-        spots = [(r, c) for r in range(self.n) for c in range(self.n)]
+    def _place(self, safe_r, safe_c):
+        # 首次挖开时才布雷；保证 safe 格及其 8 邻域无雷，从而挖开一定是 0 并自动扩散
+        spots = [(r, c) for r in range(self.n) for c in range(self.n)
+                 if not (abs(r - safe_r) <= 1 and abs(c - safe_c) <= 1)]
         random.shuffle(spots)
         for (r, c) in spots[:self.mines]:
             self.board[r][c] = -1
@@ -882,9 +884,9 @@ class GameMines(MiniGame):
         self.rev = [[False] * self.n for _ in range(self.n)]
         self.flag = [[False] * self.n for _ in range(self.n)]
         self.over = False
+        self.started = False
         self.sel = None
         self.board = [[0] * self.n for _ in range(self.n)]
-        self._place()
         self._draw()
 
     def _tap(self, e):
@@ -904,6 +906,9 @@ class GameMines(MiniGame):
         r, c = self.sel
         if self.flag[r][c]:
             return
+        if not self.started:
+            self.started = True
+            self._place(r, c)
         self._reveal(r, c)
         if self.board[r][c] == -1:
             self.over = True
@@ -951,7 +956,7 @@ class GameMines(MiniGame):
                         cv.create_text(x + cell / 2, y + cell / 2, text="✸",
                                        fill=DANGER, font=FONT_NORMAL)
                     elif v > 0:
-                        cols = ["", "", "#00b4d8", "#06d6a0", "#fb8500",
+                        cols = ["", "#0077b6", "#00b4d8", "#06d6a0", "#fb8500",
                                 "#ef476f", "#c77dff", "#ffd166", "#80ed99"]
                         cv.create_text(x + cell / 2, y + cell / 2, text=str(v),
                                        fill=cols[v], font=FONT_SMALL)
@@ -963,6 +968,9 @@ class GameMines(MiniGame):
                                        fill=DANGER, font=FONT_SMALL)
                     else:
                         win = False
+                if self.sel == (r, c):
+                    cv.create_rectangle(x + 1, y + 1, x + cell - 1,
+                                        y + cell - 1, outline=ACCENT, width=2)
         if self.over:
             cv.create_text(w / 2, 16, text="踩雷了！点重开", fill=DANGER,
                            font=FONT_NORMAL)
