@@ -82,17 +82,19 @@ class MiniGame(tk.Toplevel):
         except Exception:
             pass
         # 小屏用更小的字体和更紧的 padding，避免底部按钮行占太多高度
+        # 关键：覆盖 TButton 默认 width=-11(≈72px)。否则多按钮行总宽超过
+        # 240px，Tk 会把尾部按钮压成 1px，导致「按钮显示不全 / 缺失」。
         btn_font = FONT_SMALL if BOARD else FONT_NORMAL
         s.configure("UH.TButton", background=ACCENT, foreground=ON_ACCENT,
-                    font=btn_font, borderwidth=0,
+                    font=btn_font, borderwidth=0, width=4,
                     padding=(2, 1) if BOARD else 6)
         s.map("UH.TButton", background=[("active", ACCENT2)])
         s.configure("UH.Danger.TButton", background=DANGER, foreground="#ffffff",
-                    font=btn_font, borderwidth=0,
+                    font=btn_font, borderwidth=0, width=6,
                     padding=(2, 1) if BOARD else 6)
         s.map("UH.Danger.TButton", background=[("active", "#b00020")])
         s.configure("UH.Num.TButton", background=SURFACE2, foreground=TEXT,
-                    font=btn_font, borderwidth=0,
+                    font=btn_font, borderwidth=0, width=3,
                     padding=(2, 1) if BOARD else 6)
         s.map("UH.Num.TButton", background=[("active", HOVER)])
 
@@ -185,11 +187,11 @@ class GameCenter(tk.Toplevel):
             pass
         btn_font = FONT_SMALL if BOARD else FONT_NORMAL
         s.configure("UH.TButton", background=ACCENT, foreground=ON_ACCENT,
-                    font=btn_font, borderwidth=0,
+                    font=btn_font, borderwidth=0, width=4,
                     padding=(2, 1) if BOARD else 6)
         s.map("UH.TButton", background=[("active", ACCENT2)])
         s.configure("UH.Danger.TButton", background=DANGER, foreground="#ffffff",
-                    font=btn_font, borderwidth=0,
+                    font=btn_font, borderwidth=0, width=6,
                     padding=(2, 1) if BOARD else 6)
         s.map("UH.Danger.TButton", background=[("active", "#b00020")])
 
