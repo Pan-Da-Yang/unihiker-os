@@ -37,6 +37,7 @@ import filemanager
 import imageviewer
 import videoplayer
 import gamecenter
+import pincontrol
 
 
 class Launcher:
@@ -91,20 +92,21 @@ class Launcher:
             ("image", "图片查看", ACCENT2, self._spawn_image),
             ("video", "视频播放", DANGER, self._spawn_video),
             ("game", "游戏中心", "#9b5de5", self._spawn_games),
+            ("pin", "引脚控制", "#2ec4b6", self._spawn_pins),
         ]
         for idx, item in enumerate(self._icons):
             self._make_icon(self.grid, item, idx)
 
     def _make_icon(self, parent, item, idx):
         kind, label, color, cmd = item
-        row, col = divmod(idx, 2)
+        row, col = divmod(idx, 3)
 
         if self.board:
-            cell_w, cell_h = 96, 96
-            icon_w, icon_h = 40, 34
-            pad = 4
+            cell_w, cell_h = 70, 104
+            icon_w, icon_h = 34, 30
+            pad = 3
         else:
-            cell_w, cell_h = 140, 140
+            cell_w, cell_h = 200, 150
             icon_w, icon_h = 64, 54
             pad = 10
 
@@ -194,6 +196,27 @@ class Launcher:
                             outline=color, width=2)
             cvs.create_oval(w - pad - 10, cy + 2, w - pad - 2, cy + 10,
                             outline=color, width=2)
+        elif kind == "pin":
+            # 芯片：中间方块 + 四边引脚
+            cx, cy = w // 2, h // 2
+            bw, bh = w - pad * 2 - 16, h - pad * 2 - 16
+            cvs.create_rectangle(cx - bw // 2, cy - bh // 2,
+                                 cx + bw // 2, cy + bh // 2,
+                                 outline=color, width=2)
+            for i in range(3):
+                off = (i - 1) * (bw // 3)
+                cvs.create_line(cx + off, cy - bh // 2,
+                                cx + off, cy - bh // 2 - 5,
+                                fill=color, width=2)
+                cvs.create_line(cx + off, cy + bh // 2,
+                                cx + off, cy + bh // 2 + 5,
+                                fill=color, width=2)
+                cvs.create_line(cx - bw // 2, cy + off,
+                                cx - bw // 2 - 5, cy + off,
+                                fill=color, width=2)
+                cvs.create_line(cx + bw // 2, cy + off,
+                                cx + bw // 2 + 5, cy + off,
+                                fill=color, width=2)
 
     def _draw_gear(self, cvs, color, w, h):
         cx, cy = w // 2, h // 2
@@ -257,6 +280,9 @@ class Launcher:
     def _spawn_games(self):
         spawn_window(self.root, self._open_gamecenter, None)
 
+    def _spawn_pins(self):
+        spawn_window(self.root, self._open_pincontrol, None)
+
     def _open_image_viewer(self, path=None):
         try:
             if path is None:
@@ -305,6 +331,15 @@ class Launcher:
 
     def _open_settings(self):
         SettingsWindow(self.root)
+
+    def _open_pincontrol(self, path=None):
+        try:
+            win = pincontrol.PinControl(self.root)
+            self._track(win)
+            return win
+        except Exception as e:
+            messagebox.showerror("打开失败", f"引脚控制：{e}")
+            return None
 
     def _exit(self):
         self.root.destroy()
