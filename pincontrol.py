@@ -18,7 +18,7 @@
 蜂鸣器走 P0 的 PWM 通道；其余 PWM 引脚可接舵机或做模拟输出。
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 import theme
 from theme import (
@@ -90,6 +90,7 @@ class PinControl(tk.Toplevel):
         self._bz_playing = False
         self._bz_stop_id = None
         self._bz_redirected = False
+        self._toast_id = None
 
         self._build_ui()
         self._bind_board_key()
@@ -119,6 +120,11 @@ class PinControl(tk.Toplevel):
 
         # ---- 引脚列表 (P0–P20，可滚动) ----
         self._build_pin_list()
+
+        # ---- 底部状态条（非阻塞提示，替代模态 messagebox，避免小屏卡死）----
+        self.status_lbl = tk.Label(self, text="", bg=BG, fg=DANGER,
+                                   font=FONT_SMALL, anchor=tk.W, height=1)
+        self.status_lbl.pack(fill=tk.X, padx=6, pady=(0, 2))
 
         self._style()
 
@@ -232,6 +238,28 @@ class PinControl(tk.Toplevel):
                           "mode_btn": mode_btn, "ctrl": ctrl,
                           "read_lbl": None, "angle_lbl": None, "duty_lbl": None}
 
+    # ============ 非阻塞提示（替代模态 messagebox） ============
+    def _toast(self, msg, color=DANGER, ms=3500):
+        """在底部状态条显示提示，定时自动清除；不弹模态框，触摸屏不会卡死。"""
+        if self._toast_id is not None:
+            try:
+                self.after_cancel(self._toast_id)
+            except Exception:
+                pass
+            self._toast_id = None
+        try:
+            self.status_lbl.config(text=str(msg), fg=color)
+        except Exception:
+            pass
+        self._toast_id = self.after(ms, lambda: self._clear_toast())
+
+    def _clear_toast(self):
+        self._toast_id = None
+        try:
+            self.status_lbl.config(text="")
+        except Exception:
+            pass
+
     # ============ 蜂鸣器逻辑 ============
     def _bz_redirect(self):
         if not self.hw or self._bz_redirected:
@@ -242,7 +270,7 @@ class PinControl(tk.Toplevel):
                 _PP["buzzer"].redirect(const)  # 蜂鸣器重定向到 P0
             self._bz_redirected = True
         except Exception as e:
-            messagebox.showerror("蜂鸣器", "P0 重定向失败：%s" % e)
+            self._toast("蜂鸣器 P0 重定向失败：%s" % e)
 
     def _bz_step_freq(self, d):
         v = max(50, min(4000, self.bz_freq.get() + d))
@@ -262,7 +290,7 @@ class PinControl(tk.Toplevel):
 
     def _bz_play(self):
         if not self.hw:
-            messagebox.showinfo("提示", "当前环境未检测到 pinpong / 行空板硬件")
+            self._toast("当前环境未检测到 pinpong / 行空板硬件", color=MUTED)
             return
         self._bz_redirect()
         try:
@@ -273,7 +301,7 @@ class PinControl(tk.Toplevel):
                 dur = int(self.bz_dur.get() * 1000)
                 self._bz_stop_id = self.after(dur, self._bz_stop)
         except Exception as e:
-            messagebox.showerror("蜂鸣器", "播放失败：%s" % e)
+            self._toast("蜂鸣器播放失败：%s" % e)
 
     def _bz_preset(self, hz):
         self.bz_freq.set(hz)
@@ -285,7 +313,7 @@ class PinControl(tk.Toplevel):
     def _bz_beep(self):
         """P0 列表项快捷蜂鸣：按当前频率响 0.3s。"""
         if not self.hw:
-            messagebox.showinfo("提示", "当前环境未检测到 pinpong / 行空板硬件")
+            self._toast("当前环境未检测到 pinpong / 行空板硬件", color=MUTED)
             return
         prev_freq = self.bz_freq.get()
         self._bz_redirect()
@@ -293,7 +321,7 @@ class PinControl(tk.Toplevel):
             _PP["buzzer"].pitch(prev_freq)
             self.after(300, self._bz_stop)
         except Exception as e:
-            messagebox.showerror("蜂鸣器", "蜂鸣失败：%s" % e)
+            self._toast("蜂鸣器蜂鸣失败：%s" % e)
 
     def _bz_stop(self):
         if self._bz_stop_id is not None:
@@ -332,19 +360,38 @@ class PinControl(tk.Toplevel):
         self._set_mode(idx, nxt)
 
     def _close_obj(self, p):
-        if p.get("obj") is not None:
+        obj = p.get("obj")
+        if obj is not None:
+            # 舵机：切走前务必释放 PWM 通道，否则同引脚再建 PWM 会抢通道死锁
+            if p.get("mode") == "servo":
+                try:
+                    obj.write_angle(90)  # 先回中，避免舵机停在极端角
+                except Exception:
+                    pass
+                for meth in ("detach", "deinit", "stop"):
+                    fn = getattr(obj, meth, None)
+                    if callable(fn):
+                        try:
+                            fn()
+                        except Exception:
+                            pass
             try:
                 del p["obj"]
             except Exception:
                 pass
-            p["obj"] = None
+        p["obj"] = None
 
     def _set_mode(self, idx, mode):
         p = self.pins[idx]
         if not self.hw:
-            messagebox.showinfo("提示", "当前环境未检测到 pinpong / 行空板硬件")
+            self._toast("当前环境未检测到 pinpong / 行空板硬件", color=MUTED)
             return
-        # 清理旧对象与控件
+        const = _pin_const(idx)
+        if const is None:
+            self._toast("P%d 在该硬件上不可用" % idx)
+            return
+
+        # 清理旧对象与控件（含舵机释放，必须在新建对象之前）
         self._close_obj(p)
         for c in list(p["ctrl"].winfo_children()):
             c.destroy()
@@ -353,12 +400,6 @@ class PinControl(tk.Toplevel):
         if mode == "none":
             p["mode"] = "none"
             p["mode_btn"].config(text="未用")
-            return
-
-        const = _pin_const(idx)
-        if const is None:
-            messagebox.showerror("引脚", "P%d 在该硬件上不可用" % idx)
-            p["mode_btn"].config(text=self._mode_text(p["mode"]))
             return
 
         pin_cls = _PP.get("Pin")
@@ -410,7 +451,7 @@ class PinControl(tk.Toplevel):
                 try:
                     p["obj"].write_angle(p["angle"])
                 except Exception as e:
-                    messagebox.showerror("舵机", "P%d 写入失败：%s" % (idx, e))
+                    self._toast("舵机 P%d 写入失败：%s" % (idx, e))
 
             elif mode == "pwm":
                 pwm_cls = _PP.get("PWM")
@@ -434,11 +475,12 @@ class PinControl(tk.Toplevel):
                            style="UH.Num.TButton").pack(side=tk.LEFT, padx=1)
                 self._pwm_write(idx)
         except Exception as e:
-            messagebox.showerror("引脚", "P%d 初始化失败：%s" % (idx, e))
+            self._toast("P%d 初始化失败：%s" % (idx, e))
             self._close_obj(p)
             for c in list(p["ctrl"].winfo_children()):
                 c.destroy()
-            p["mode_btn"].config(text=self._mode_text(p["mode"]))
+            p["mode"] = "none"
+            p["mode_btn"].config(text="未用")
 
     def _toggle_out(self, idx):
         p = self.pins[idx]
@@ -448,7 +490,7 @@ class PinControl(tk.Toplevel):
         try:
             p["obj"].write_digital(p["state"])
         except Exception as e:
-            messagebox.showerror("引脚", "P%d 写入失败：%s" % (idx, e))
+            self._toast("引脚 P%d 写入失败：%s" % (idx, e))
             return
         # 找到控制按钮并更新文字
         for c in p["ctrl"].winfo_children():
@@ -465,7 +507,7 @@ class PinControl(tk.Toplevel):
         try:
             p["obj"].write_angle(a)
         except Exception as e:
-            messagebox.showerror("舵机", "P%d 写入失败：%s" % (idx, e))
+            self._toast("舵机 P%d 写入失败：%s" % (idx, e))
             return
         p["angle_lbl"].config(text="%d°" % a)
 
@@ -477,7 +519,7 @@ class PinControl(tk.Toplevel):
             # pinpong PWM 占空比范围 0–255
             p["obj"].write_analog(int(p["duty"] / 100.0 * 255))
         except Exception as e:
-            messagebox.showerror("PWM", "P%d 写入失败：%s" % (idx, e))
+            self._toast("PWM P%d 写入失败：%s" % (idx, e))
 
     def _pwm_step(self, idx, d):
         p = self.pins[idx]
