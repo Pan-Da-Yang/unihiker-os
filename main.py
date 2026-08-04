@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 行空板 OS - 桌面启动器（全家桶入口）
-启动后进入一个极简桌面：2×2 图标网格 + 底部任务栏（时钟）。
+启动后进入一个极简桌面：3×3 九宫格图标网格（预留扩展位）+ 底部任务栏（时钟）。
 点击图标打开对应 App，各 App 之间自动联动：
   · 文件管理器双击图片 -> 图片查看器
   · 文件管理器双击视频 -> 视频播放器
@@ -83,7 +83,8 @@ class Launcher:
         set_btn.bind("<Enter>", lambda e: set_btn.config(bg=ACCENT2))
         set_btn.bind("<Leave>", lambda e: set_btn.config(bg=ACCENT))
 
-        # 2×2 图标网格，居中，避免小屏溢出
+        # 3×3 九宫格，居中；用空位占位把网格补齐到 9 格，
+        # 后续新增 App 只要往 self._icons 里追加即可自动填满。
         self.grid = tk.Frame(self.root, bg=BG)
         self.grid.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
@@ -94,21 +95,25 @@ class Launcher:
             ("game", "游戏中心", "#9b5de5", self._spawn_games),
             ("pin", "引脚控制", "#2ec4b6", self._spawn_pins),
         ]
-        for idx, item in enumerate(self._icons):
-            self._make_icon(self.grid, item, idx)
+        cols, rows = 3, 3
+        for idx in range(cols * rows):
+            item = self._icons[idx] if idx < len(self._icons) else None
+            self._make_icon(self.grid, item, idx, cols)
 
-    def _make_icon(self, parent, item, idx):
-        kind, label, color, cmd = item
-        row, col = divmod(idx, 3)
-
+    def _cell_geom(self):
+        """返回 (cell_w, cell_h, icon_w, icon_h, pad)，板子/开发机两套尺寸。"""
         if self.board:
-            cell_w, cell_h = 70, 104
-            icon_w, icon_h = 34, 30
-            pad = 3
-        else:
-            cell_w, cell_h = 200, 150
-            icon_w, icon_h = 64, 54
-            pad = 10
+            # 240x320：3 行须压缩高度才能塞下九宫格
+            return 72, 76, 32, 30, 2
+        return 200, 120, 64, 54, 10
+
+    def _make_icon(self, parent, item, idx, cols=3):
+        if item is None:
+            self._make_empty_slot(parent, idx, cols)
+            return
+        kind, label, color, cmd = item
+        row, col = divmod(idx, cols)
+        cell_w, cell_h, icon_w, icon_h, pad = self._cell_geom()
 
         cell = tk.Frame(parent, bg=BG, width=cell_w, height=cell_h)
         cell.grid(row=row, column=col, padx=pad, pady=pad)
@@ -127,6 +132,24 @@ class Launcher:
         btn.pack()
 
         # 让网格居中
+        parent.grid_rowconfigure(row, weight=1)
+        parent.grid_columnconfigure(col, weight=1)
+
+    def _make_empty_slot(self, parent, idx, cols):
+        """九宫格里尚未启用的空位，用浅色 '+' 表示可扩展。"""
+        row, col = divmod(idx, cols)
+        cell_w, cell_h, _iw, _ih, pad = self._cell_geom()
+        cell = tk.Frame(parent, bg=BG, width=cell_w, height=cell_h)
+        cell.grid(row=row, column=col, padx=pad, pady=pad)
+        cell.pack_propagate(False)
+        cell.grid_propagate(False)
+
+        cvs = tk.Canvas(cell, width=26, height=26, bg=BG,
+                        highlightthickness=0)
+        cvs.pack(expand=True)
+        cvs.create_line(13, 5, 13, 21, fill=MUTED, width=2)
+        cvs.create_line(5, 13, 21, 13, fill=MUTED, width=2)
+
         parent.grid_rowconfigure(row, weight=1)
         parent.grid_columnconfigure(col, weight=1)
 
