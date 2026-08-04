@@ -38,6 +38,8 @@ import imageviewer
 import videoplayer
 import gamecenter
 import pincontrol
+import composer
+import blockcode
 
 
 class Launcher:
@@ -94,6 +96,8 @@ class Launcher:
             ("video", "视频播放", DANGER, self._spawn_video),
             ("game", "游戏中心", "#9b5de5", self._spawn_games),
             ("pin", "引脚控制", "#2ec4b6", self._spawn_pins),
+            ("music", "编曲", "#f4a261", self._spawn_composer),
+            ("blocks", "图形编程", "#577590", self._spawn_blockcode),
         ]
         cols, rows = 3, 3
         for idx in range(cols * rows):
@@ -240,6 +244,33 @@ class Launcher:
                 cvs.create_line(cx + bw // 2, cy + off,
                                 cx + bw // 2 + 5, cy + off,
                                 fill=color, width=2)
+        elif kind == "music":
+            # 音符：符头 + 符干 + 八分音符旗
+            cx = w // 2 - 2
+            cy = h // 2 + 6
+            r = 5
+            cvs.create_oval(cx - r, cy - r, cx + r, cy + r,
+                            outline=color, width=2)
+            cvs.create_line(cx + r, cy, cx + r, cy - 18,
+                            fill=color, width=2)
+            cvs.create_line(cx + r, cy - 18, cx + r + 8, cy - 14,
+                            fill=color, width=2)
+            # 第二个符头（八度）
+            cvs.create_oval(cx - r + 12, cy - r - 8, cx + r + 12, cy - 8,
+                            outline=color, width=2)
+            cvs.create_line(cx + r + 12, cy - 8, cx + r + 12, cy - 26,
+                            fill=color, width=2)
+        elif kind == "blocks":
+            # 积木：两块咬合的方块（拼图感）
+            cvs.create_rectangle(pad, pad + 6, w - pad - 10, h - pad - 6,
+                                 outline=color, width=2)
+            cvs.create_rectangle(pad + 10, pad, w - pad, h - pad - 12,
+                                 outline=color, width=2)
+            # 凸起小圆（拼图扣）
+            cvs.create_oval(w // 2 - 3, pad + 2, w // 2 + 3, pad + 8,
+                            outline=color, width=2)
+            cvs.create_oval(w // 2 - 3, h - pad - 8, w // 2 + 3, h - pad - 2,
+                            outline=color, width=2)
 
     def _draw_gear(self, cvs, color, w, h):
         cx, cy = w // 2, h // 2
@@ -306,6 +337,12 @@ class Launcher:
     def _spawn_pins(self):
         spawn_window(self.root, self._open_pincontrol, None)
 
+    def _spawn_composer(self):
+        spawn_window(self.root, self._open_composer, None)
+
+    def _spawn_blockcode(self):
+        spawn_window(self.root, self._open_blockcode, None)
+
     def _open_image_viewer(self, path=None):
         try:
             if path is None:
@@ -362,6 +399,24 @@ class Launcher:
             return win
         except Exception as e:
             messagebox.showerror("打开失败", f"引脚控制：{e}")
+            return None
+
+    def _open_composer(self, path=None):
+        try:
+            win = composer.Composer(self.root)
+            self._track(win)
+            return win
+        except Exception as e:
+            messagebox.showerror("打开失败", f"编曲：{e}")
+            return None
+
+    def _open_blockcode(self, path=None):
+        try:
+            win = blockcode.BlockCode(self.root)
+            self._track(win)
+            return win
+        except Exception as e:
+            messagebox.showerror("打开失败", f"图形编程：{e}")
             return None
 
     def _exit(self):
