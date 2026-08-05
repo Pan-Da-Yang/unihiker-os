@@ -15,6 +15,9 @@ import os
 import sys
 import time
 import math
+import json
+import threading
+import platform
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -39,7 +42,15 @@ import videoplayer
 import gamecenter
 import pincontrol
 import composer
-import blockcode
+# 机械臂控制为本地可选模块：本地有 armcontrol.py 则显示入口，
+# 远程仓库（GitHub）通过 .gitignore 排除该文件，导入失败时自动隐藏，不崩溃。
+try:
+    import armcontrol
+except ImportError:
+    armcontrol = None
+import camera
+from qq.ui import QQApp
+from qq.net import QQClient
 
 
 class Launcher:
@@ -97,8 +108,12 @@ class Launcher:
             ("game", "游戏中心", "#9b5de5", self._spawn_games),
             ("pin", "引脚控制", "#2ec4b6", self._spawn_pins),
             ("music", "编曲", "#f4a261", self._spawn_composer),
-            ("blocks", "图形编程", "#577590", self._spawn_blockcode),
+            ("qq", "QQ", "#12b7f5", self._spawn_qq),
         ]
+        # 机械臂为本地可选模块，仅当 armcontrol 可导入时才加入九宫格
+        if armcontrol is not None:
+            self._icons.append(("arm", "机械臂", "#e76f51", self._spawn_arm))
+        self._icons.append(("camera", "相机", "#06d6a0", self._spawn_camera))
         cols, rows = 3, 3
         for idx in range(cols * rows):
             item = self._icons[idx] if idx < len(self._icons) else None
@@ -260,17 +275,66 @@ class Launcher:
                             outline=color, width=2)
             cvs.create_line(cx + r + 12, cy - 8, cx + r + 12, cy - 26,
                             fill=color, width=2)
-        elif kind == "blocks":
-            # 积木：两块咬合的方块（拼图感）
-            cvs.create_rectangle(pad, pad + 6, w - pad - 10, h - pad - 6,
-                                 outline=color, width=2)
-            cvs.create_rectangle(pad + 10, pad, w - pad, h - pad - 12,
-                                 outline=color, width=2)
-            # 凸起小圆（拼图扣）
-            cvs.create_oval(w // 2 - 3, pad + 2, w // 2 + 3, pad + 8,
+        elif kind == "qq":
+            # QQ 企鹅风格：圆头 + 身体 + 围巾（简化线条版）
+            cx = w // 2
+            cy = h // 2 + 1
+            # 头
+            hr = 8
+            cvs.create_oval(cx - hr, cy - hr - 4, cx + hr, cy + hr - 4,
                             outline=color, width=2)
-            cvs.create_oval(w // 2 - 3, h - pad - 8, w // 2 + 3, h - pad - 2,
+            # 身体（下方椭圆）
+            cvs.create_oval(cx - 6, cy - 1, cx + 6, cy + 11,
                             outline=color, width=2)
+            # 围巾
+            cvs.create_line(cx - 7, cy + 2, cx + 7, cy + 2,
+                            fill=color, width=2)
+            # 眼睛两点
+            cvs.create_oval(cx - 3, cy - 6, cx - 1, cy - 4, fill=color, outline="")
+            cvs.create_oval(cx + 1, cy - 6, cx + 3, cy - 4, fill=color, outline="")
+            # 嘴巴（小三角）
+            cvs.create_polygon(cx - 2, cy - 2, cx + 2, cy - 2, cx, cy,
+                               outline=color, fill="", width=1)
+        elif kind == "arm":
+            # 机械臂：底座 + 两段连杆 + 夹爪
+            bx = w // 2
+            by = h - pad - 2
+            # 底座椭圆
+            cvs.create_oval(bx - 10, by - 5, bx + 10, by + 2,
+                            outline=color, width=1)
+            # 大臂
+            cvs.create_line(bx, by - 3, bx - 4, pad + 10,
+                            fill=color, width=2, capstyle=tk.ROUND)
+            # 小臂
+            cvs.create_line(bx - 4, pad + 10, bx + 6, pad + 2,
+                            fill=color, width=2, capstyle=tk.ROUND)
+            # 夹爪两指
+            cvs.create_line(bx + 6, pad + 2, bx + 3, pad - 1,
+                            fill=color, width=1)
+            cvs.create_line(bx + 6, pad + 2, bx + 9, pad - 1,
+                            fill=color, width=1)
+            # 关节点
+            for jx, jy in [(bx, by - 3), (bx - 4, pad + 10), (bx + 6, pad + 2)]:
+                cvs.create_oval(jx - 2, jy - 2, jx + 2, jy + 2,
+                                fill=color, outline="")
+        elif kind == "camera":
+            # 相机：机身 + 镜头圈 + 闪光点
+            bw, bh = w - pad * 2 - 8, h - pad * 2 - 14
+            cvs.create_rectangle(pad, pad + 4, pad + bw, pad + 4 + bh,
+                                 outline=color, width=2)
+            # 顶部取景器凸起
+            cvs.create_rectangle(pad + 6, pad - 2, pad + 16, pad + 4,
+                                 outline=color, width=2)
+            # 镜头
+            cx, cy = pad + bw // 2, pad + 4 + bh // 2
+            lr = min(bw, bh) // 3
+            cvs.create_oval(cx - lr, cy - lr, cx + lr, cy + lr,
+                            outline=color, width=2)
+            cvs.create_oval(cx - lr + 3, cy - lr + 3, cx + lr - 3, cy + lr - 3,
+                            outline=color, width=1)
+            # 闪光灯
+            cvs.create_oval(pad + bw - 6, pad + 8, pad + bw - 2, pad + 12,
+                            outline=color, width=1)
 
     def _draw_gear(self, cvs, color, w, h):
         cx, cy = w // 2, h // 2
@@ -340,8 +404,16 @@ class Launcher:
     def _spawn_composer(self):
         spawn_window(self.root, self._open_composer, None)
 
-    def _spawn_blockcode(self):
-        spawn_window(self.root, self._open_blockcode, None)
+    def _spawn_qq(self):
+        spawn_window(self.root, self._open_qq, None)
+
+    def _spawn_arm(self):
+        if armcontrol is None:
+            return
+        spawn_window(self.root, self._open_armcontrol, None)
+
+    def _spawn_camera(self):
+        spawn_window(self.root, self._open_camera, None)
 
     def _open_image_viewer(self, path=None):
         try:
@@ -410,13 +482,107 @@ class Launcher:
             messagebox.showerror("打开失败", f"编曲：{e}")
             return None
 
-    def _open_blockcode(self, path=None):
+    def _open_qq(self, path=None):
         try:
-            win = blockcode.BlockCode(self.root)
+            top = tk.Toplevel(self.root)
+            top.title("QQ - 行空板")
+            # QQ 界面专为 240x320 设计，两种模式都固定此尺寸
+            if BOARD:
+                apply_board_window(top)
+            else:
+                top.geometry("240x320")
+            top.configure(bg="#ffffff")
+
+            # ---- 复用 qq_unihiker 的客户端与连接逻辑 ----
+            cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "qq", "config.json")
+            try:
+                with open(cfg_path, encoding="utf-8") as f:
+                    cfg = json.load(f)
+            except Exception:
+                cfg = {}
+            DEFAULT_SERVER = "win1q4t1r.xyz"
+            PORT = 8888
+            _saved_ip = cfg.get("server_ip")
+            _LOCALHOST_SET = ("127.0.0.1", "localhost", "::1")
+            _is_not_windows = platform.system().lower() != "windows"
+            if _is_not_windows and (not _saved_ip or _saved_ip in _LOCALHOST_SET):
+                server_ip = DEFAULT_SERVER
+            else:
+                server_ip = _saved_ip or DEFAULT_SERVER
+            port = cfg.get("port", PORT)
+
+            client = QQClient(server_ip or "127.0.0.1", port,
+                              lambda m: top.after(0, app.on_net, m))
+            app = QQApp(top, client)
+            app.fields["serverip"] = server_ip
+
+            # 连接逻辑（对齐 qq_unihiker/main.py）
+            def try_connect():
+                raw = (app.fields.get("serverip", "") or "").strip() or "127.0.0.1"
+                ip = raw
+                if ":" in raw:
+                    parts = raw.rsplit(":", 1)
+                    ip = parts[0].strip()
+                    try:
+                        p = int(parts[1].strip())
+                        client.port = p
+                    except (ValueError, IndexError):
+                        ip = raw
+                client.host = ip
+                try:
+                    client.connect(timeout=8)
+                    cfg["server_ip"] = raw
+                    cfg["port"] = client.port
+                    try:
+                        with open(cfg_path, "w", encoding="utf-8") as f:
+                            json.dump(cfg, f, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
+                    top.after(0, app._on_connected)
+                except Exception as e:
+                    err = str(e)
+                    top.after(0, lambda h=ip, p=client.port, e=err:
+                               app._on_conn_fail(h, p, e))
+
+            app.on_retry = lambda: threading.Thread(
+                target=try_connect, daemon=True).start()
+            threading.Thread(target=try_connect, daemon=True).start()
+
+            # 关闭窗口时一并关闭网络客户端
+            orig_destroy = top.destroy
+            def _my_destroy():
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                orig_destroy()
+            top.destroy = _my_destroy
+
+            self._track(top)
+            return top
+        except Exception as e:
+            messagebox.showerror("打开失败", f"QQ：{e}")
+            return None
+
+    def _open_armcontrol(self, path=None):
+        if armcontrol is None:
+            return None
+        try:
+            win = armcontrol.ArmControl(self.root)
             self._track(win)
             return win
         except Exception as e:
-            messagebox.showerror("打开失败", f"图形编程：{e}")
+            messagebox.showerror("打开失败", f"机械臂控制：{e}")
+            return None
+
+    def _open_camera(self, path=None):
+        try:
+            win = camera.CameraApp(self.root)
+            self._track(win)
+            return win
+        except Exception as e:
+            messagebox.showerror("打开失败", f"相机：{e}")
             return None
 
     def _exit(self):

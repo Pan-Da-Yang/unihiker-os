@@ -19,3 +19,7 @@ Thumbs.db
 # Local temp / test artifacts
 _t.png
 test_spawn_restore.py
+
+# 本地专属模块（不上传 GitHub，本地保留）
+armcontrol.py
+.arm_positions.json
