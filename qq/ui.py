@@ -270,6 +270,7 @@ class QQApp:
                                    fg=RED if is_error else ONLINE)
 
     def do_login(self):
+        self._commit_ime()
         u = self.fields["username"].strip()
         p = self.fields["password"]
         if not u or not p:
@@ -282,6 +283,7 @@ class QQApp:
         self.root.after(400, lambda: self.client.login(u, p))
 
     def do_register(self):
+        self._commit_ime()
         u = self.fields["username"].strip()
         p = self.fields["password"]
         if not u or not p:
@@ -416,6 +418,7 @@ class QQApp:
         return f
 
     def _do_af(self):
+        self._commit_ime()
         code = self.fields["friendcode"].strip().upper()
         if not code: return self.af_st.config(text="请输入好友码")
         self.af_st.config(text="发送中...")
@@ -566,6 +569,7 @@ class QQApp:
         return f
 
     def _do_cg(self):
+        self._commit_ime()
         name = self.fields["groupname"].strip() or "群聊"
         codes = [c.strip().upper() for c in self.fields["groupcodes"].split(",")
                  if c.strip()]
@@ -616,6 +620,7 @@ class QQApp:
         self.render_msgs()
 
     def send_message(self):
+        self._commit_ime()
         t = self.draft.strip()
         if not t or self.current is None: return
         peer = self.current
@@ -676,7 +681,8 @@ class QQApp:
         elif k == "^":
             disp = "^"; bg_c, fg_c = "#ddd", TEXT_DARK; ft = F(KEY_FONT_SIZE)
         elif k == ">":
-            disp = "发送"; bg_c, fg_c = QQ_BLUE, "white"; ft = F(KEY_FONT_SIZE, "bold")
+            disp = "↵"   # 回车/确认（上下文感知：聊天=发送，登录=登录，加好友=确定，建群=创建）
+            bg_c, fg_c = QQ_BLUE, "white"; ft = F(KEY_FONT_SIZE, "bold")
         elif k in ("中", "EN"):
             disp = k
             bg_c = "#a8d4ff" if self.ime_on else "#e0e0e0"
@@ -723,8 +729,8 @@ class QQApp:
             else:
                 self._type(" ")
         elif ch == ">":
-            # 发送
-            if self.input_target == "draft": self.send_message()
+            # 回车/确认（上下文感知，见 _confirm）
+            self._confirm()
         elif ch == "123":
             self.kb_mode = "123"; self._build_keys()
         elif ch == "abc":
@@ -732,6 +738,7 @@ class QQApp:
         elif ch == "^":
             self.caps = not self.caps; self._build_keys()
         elif ch in ("中", "EN"):
+            self._commit_ime()       # 切中文/英文前先把未选拼音提交，避免丢字
             self.ime_on = not self.ime_on
             self.ime_py = ""
             self._render_cands()
@@ -768,6 +775,28 @@ class QQApp:
     def _commit(self, char):
         self._type(char); self.ime_py = ""; self._render_cands()
 
+    def _commit_ime(self):
+        """把当前未确认的拼音缓冲提交进输入框（有候选取第一个，否则原样提交）。"""
+        if self.ime_py:
+            if self.ime_cands:
+                self._commit(self.ime_cands[0])
+            else:
+                self._type(self.ime_py); self.ime_py = ""
+                self._render_cands()
+
+    def _confirm(self):
+        """回车/确认键（↵）：先提交残留拼音，再按当前页面触发对应动作。"""
+        self._commit_ime()
+        page = self.current_page
+        if self.input_target == "draft":
+            self.send_message()
+        elif page == "auth":
+            self.do_login()
+        elif page == "add_friend":
+            self._do_af()
+        elif page == "create_group":
+            self._do_cg()
+
     # ================================================================
     #  候选条渲染
     # ================================================================
@@ -799,9 +828,11 @@ class QQApp:
     #  输入焦点 & 显示刷新
     # ================================================================
     def set_target(self, target):
+        self._commit_ime()   # 切到别的输入框前，先把未确认的拼音提交，避免丢字
         self.input_target = target
-        # 好友码/群码是纯 ASCII 字段，强制英文模式，避免拼音吞掉字母
-        if target in ("friendcode", "groupcodes"):
+        # 纯 ASCII 字段（IP/用户名/密码/好友码/群码）强制英文模式，避免拼音吞掉字母
+        if target in ("serverip", "username", "password",
+                      "friendcode", "groupcodes"):
             self.ime_on = False
         self._highlight(target)
         self._refresh_display()
@@ -1056,7 +1087,7 @@ class QQApp:
         def onk(e):
             if not self.input_target: return
             if e.keysym=="Return":
-                if self.input_target=="draft": self.send_message()
+                self._confirm()
                 return
             if e.keysym=="BackSpace":
                 self._del_char(); self._refresh_display(); return
