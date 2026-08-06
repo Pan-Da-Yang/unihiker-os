@@ -108,7 +108,7 @@ class Launcher:
             ("game", "游戏中心", "#9b5de5", self._spawn_games),
             ("pin", "引脚控制", "#2ec4b6", self._spawn_pins),
             ("music", "编曲", "#f4a261", self._spawn_composer),
-            ("qq", "QQ", "#12b7f5", self._spawn_qq),
+            ("qq", "QQ", ACCENT, self._spawn_qq),
         ]
         # 机械臂为本地可选模块，仅当 armcontrol 可导入时才加入九宫格
         if armcontrol is not None:

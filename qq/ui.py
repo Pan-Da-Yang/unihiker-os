@@ -3,10 +3,11 @@
 # 布局（纯 pack + grid 混合）：
 #   root
 #   ├── host        (pack fill=both expand=True)   主内容区，各页面切换
-#   └── kb_frame    (pack side=bottom)              屏幕键盘
-#        ├── cand_bar      (pack)  候选条 / 提示
-#        ├── draft_bar     (pack)  编辑栏 [中]/[EN] + 当前内容
-#        └── keys_frame    (grid)  按键区（qwerty/123 矩阵）
+#   └── kb_frame    (pack side=bottom)              软键盘区
+#        └── softkeyboard.Keyboard  (嵌入行空OS自带软键盘组件)
+#
+# 键盘/输入法直接复用行空OS 的 softkeyboard.Keyboard（配色与拼音字库同源），
+# 配色全部引用 theme.py，跟随行空OS 亮/暗主题，不再自绘键盘与独立配色。
 #
 # 键盘页：auth / chat / add_friend / create_group → 键盘自动显示
 # 非键盘页：contacts / menu → 键盘隐藏
@@ -17,37 +18,41 @@ import os
 import time
 import json
 
+import theme
+import softkeyboard
+from theme import (
+    BG, SURFACE, SURFACE2, HOVER, ACCENT, DANGER,
+    TEXT, MUTED, ON_ACCENT, BOARD,
+)
+
 # ======================== 常量 ========================
+# 配色全部跟随行空OS 主题(theme.py)：切换亮/暗主题时 QQ 自动同步，
+# 不再自绘一套配色。
 SCREEN_W, SCREEN_H = 240, 320
-QQ_BLUE   = "#12b7f5"
-CHAT_BG   = "#ededed"
-LIST_BG   = "#f5f5f5"
-SENT_BUB  = "#95ec69"
-RECV_BUB  = "#ffffff"
-TEXT_DARK = "#222222"
-MUTE_GRAY = "#999999"
+QQ_BLUE   = ACCENT      # 头部 / 主按钮：跟随 OS 主强调色
+CHAT_BG   = BG
+LIST_BG   = BG
+SENT_BUB  = ACCENT      # 自己发出的气泡：跟随 OS 强调色
+RECV_BUB  = SURFACE     # 收到的气泡：跟随 OS 面板色
+TEXT_DARK = TEXT
+MUTE_GRAY = MUTED
 HEADER_H  = 30
-ONLINE    = "#3ac34a"
-OFFLINE   = "#cccccc"
-RED       = "#fa5151"
-KB_BG     = "#d0d3d9"
-KEY_BG    = "#fafafa"
-KEY_FG    = TEXT_DARK
+ONLINE    = "#3ac34a"   # 在线状态语义色（绿），与主题无关
+OFFLINE   = MUTED
+RED       = DANGER
+KB_BG     = BG
+KEY_BG    = SURFACE
+KEY_FG    = TEXT
 KEY_FONT_SIZE = 10
-KEY_HEIGHT  = 22          # 每个按键行固定高度（4行=88 + cand16 + draft16 = ~120px总键盘）
+KEY_HEIGHT  = 22          # 每个按键行固定高度（仅占位，键盘已由行空OS组件提供）
 
 IS_UNIHIKER = (platform.system().lower() != "windows") and (
     os.path.exists("/etc/unihiker") or os.path.exists("/sys/devices/platform/board_info")
 )
 FAMILY = "WenQuanYi Micro Hei" if IS_UNIHIKER else "Microsoft YaHei"
 
-PINYIN = {}
-try:
-    _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pinyin.json")
-    with open(_p, encoding="utf-8") as f:
-        PINYIN = json.load(f)
-except Exception:
-    print("[WARN] pinyin.json 未加载")
+# 拼音输入法改由行空OS 软键盘组件(softkeyboard.Keyboard)提供，
+# 其自带 pinyin_dict.json 字库，QQ 不再维护独立拼音表。
 
 
 def F(size, weight="normal"):
@@ -73,7 +78,7 @@ def round_rect(c, x, y, w, h, r, fill, outline=None, width=1):
     return ids
 
 
-def make_avatar(parent, ch, color, size=36, bg="white"):
+def make_avatar(parent, ch, color, size=36, bg=SURFACE):
     c = tk.Canvas(parent, width=size, height=size, bg=bg, highlightthickness=0)
     pad = 2
     c.create_oval(pad, pad, size-pad, size-pad, fill=color, outline="")
@@ -111,11 +116,6 @@ class QQApp:
         self.fields = {k: "" for k in (
             "username", "password", "friendcode",
             "groupname", "groupcodes", "serverip")}
-        self.kb_mode = "abc"
-        self.caps = False
-        self.ime_on = False
-        self.ime_py = ""
-        self.ime_cands = []
         self.input_target = None
         self.current_page = None
         self.on_retry = None
@@ -137,28 +137,19 @@ class QQApp:
         self.screens["mycode"]      = self._build_mycode()
         self.screens["pending"]      = self._build_pending()
 
-        # ====== 键盘区（下面）======
-        self.kb_frame = tk.Frame(root, bg=KB_BG)
-
-        # -- 候选条 --
-        self.cand_bar = tk.Frame(self.kb_frame, bg="#e8ecf4", height=18)
-        self.cand_bar.pack_propagate(False)
-        self.cand_bar.pack(fill="x", padx=2, pady=(1,0))
-
-        # -- 编辑栏（显示当前输入内容 + 中/EN 模式）--
-        self.draft_bar = tk.Frame(self.kb_frame, bg="#c8ccd4", height=20)
-        self.draft_bar.pack_propagate(False)
-        self.draft_bar.pack(fill="x", padx=2, pady=1)
-        self.kb_draft_lbl = tk.Label(self.draft_bar, text="[EN] ", fg=TEXT_DARK,
-                                     bg="#ffffff", font=F(10), anchor="w", padx=6)
-        self.kb_draft_lbl.pack(side="left", fill="both", expand=True, padx=3, pady=2)
-
-        # -- 按键区（grid 矩阵布局）--
-        self.keys_frame = tk.Frame(self.kb_frame, bg=KB_BG)
-        self.keys_frame.pack(fill="both", expand=True, padx=2, pady=(0,1))
-
-        # 构建按键（初始 abc 布局）
-        self._build_keys()
+        # ====== 键盘区（下面）：复用行空OS 自带的软键盘组件 ======
+        # 不再自绘键盘，直接嵌入 softkeyboard.Keyboard；其配色与拼音字库
+        # 全部来自行空OS，与系统输入法完全一致。
+        self.kb_frame = tk.Frame(root, bg=BG)
+        self.kb = softkeyboard.Keyboard(
+            self.kb_frame,
+            on_char=self._type,           # 插入最终字符（字母/汉字/符号）
+            on_backspace=self._del_char,  # 删除光标前字符
+            on_confirm=self._confirm,     # 上下文确认（发送/登录/加好友/建群）
+            embed=True,
+            board=BOARD,
+        )
+        self.kb.pack(fill="both", expand=True, padx=1, pady=1)
 
         # 默认隐藏键盘
         self.kb_shown = False
@@ -181,7 +172,6 @@ class QQApp:
         self.screens[page_name].pack(fill="both", expand=True)
         self.current_page = page_name
         self.input_target = None
-        self.ime_py = ""
 
         # 键盘控制
         if page_name in self.KB_PAGES:
@@ -189,7 +179,6 @@ class QQApp:
         else:
             self._kb_hide()
 
-        self._render_cands()
         self._refresh_display()
 
     # ---- 快捷跳转 ----
@@ -222,7 +211,7 @@ class QQApp:
         # 标题栏
         hdr = tk.Frame(f, bg=QQ_BLUE, height=HEADER_H)
         hdr.pack_propagate(False); hdr.pack(fill="x")
-        tk.Label(hdr, text="QQ", fg="white", bg=QQ_BLUE,
+        tk.Label(hdr, text="QQ", fg=ON_ACCENT, bg=ACCENT,
                  font=F(16, "bold")).pack(side="left", padx=12)
 
         body = tk.Frame(f, bg=LIST_BG)
@@ -234,9 +223,9 @@ class QQApp:
         self.status_lbl.pack(fill="x", pady=(0,4))
 
         def input_row(label_text, target_key):
-            row = tk.Frame(body, bg="white", height=30)
+            row = tk.Frame(body, bg=SURFACE, height=30)
             row.pack_propagate(False); row.pack(fill="x", pady=1)
-            lbl = tk.Label(row, text=label_text, fg=MUTE_GRAY, bg="white",
+            lbl = tk.Label(row, text=label_text, fg=MUTE_GRAY, bg=SURFACE,
                            font=F(11), anchor="w", padx=8)
             lbl.pack(fill="both", expand=True)
             for w in (row, lbl):
@@ -248,12 +237,12 @@ class QQApp:
         self.pass_lbl   = input_row("密码",     "password")
 
         # 按钮
-        login_btn = tk.Label(body, text="登 录", fg="white", bg=QQ_BLUE,
+        login_btn = tk.Label(body, text="登 录", fg=ON_ACCENT, bg=ACCENT,
                              font=F(14, "bold"), height=1)
         login_btn.pack(fill="x", pady=(6,2))
         login_btn.bind("<Button-1>", lambda e: self.do_login())
 
-        reg_btn = tk.Label(body, text="注册新账号", fg=QQ_BLUE, bg="white",
+        reg_btn = tk.Label(body, text="注册新账号", fg=QQ_BLUE, bg=SURFACE,
                            font=F(12), height=1)
         reg_btn.pack(fill="x", pady=2)
         reg_btn.bind("<Button-1>", lambda e: self.do_register())
@@ -270,7 +259,6 @@ class QQApp:
                                    fg=RED if is_error else ONLINE)
 
     def do_login(self):
-        self._commit_ime()
         u = self.fields["username"].strip()
         p = self.fields["password"]
         if not u or not p:
@@ -283,7 +271,6 @@ class QQApp:
         self.root.after(400, lambda: self.client.login(u, p))
 
     def do_register(self):
-        self._commit_ime()
         u = self.fields["username"].strip()
         p = self.fields["password"]
         if not u or not p:
@@ -298,9 +285,9 @@ class QQApp:
         f = tk.Frame(self.host, bg=LIST_BG)
         hdr = tk.Frame(f, bg=QQ_BLUE, height=HEADER_H)
         hdr.pack_propagate(False); hdr.pack(fill="x")
-        tk.Label(hdr, text="QQ", fg="white", bg=QQ_BLUE,
+        tk.Label(hdr, text="QQ", fg=ON_ACCENT, bg=ACCENT,
                  font=F(16, "bold")).pack(side="left", padx=12)
-        plus = tk.Label(hdr, text="+", fg="white", bg=QQ_BLUE,
+        plus = tk.Label(hdr, text="+", fg=ON_ACCENT, bg=ACCENT,
                         font=F(16, "bold"))
         plus.pack(side="right", padx=12)
         plus.bind("<Button-1>", lambda e: self._open_menu())
@@ -333,19 +320,19 @@ class QQApp:
         return ms[-1].text if ms else ""
 
     def _ctc_row(self, peer, name, preview, online, uc, is_grp):
-        row = tk.Frame(self.ctc_inner, bg="white", height=48)
+        row = tk.Frame(self.ctc_inner, bg=SURFACE, height=48)
         row.pack_propagate(False); row.pack(fill="x")
         clr = "#9b59b6" if is_grp else QQ_BLUE
         make_avatar(row, name[0] if name else "?", clr).pack(
             side="left", padx=(8,6), pady=6)
-        tb = tk.Frame(row, bg="white")
+        tb = tk.Frame(row, bg=SURFACE)
         tb.pack(side="left", fill="both", expand=True, pady=6)
         tag = "[群] " if is_grp else ""
-        tk.Label(tb, text=tag+name, bg="white", fg=TEXT_DARK,
+        tk.Label(tb, text=tag+name, bg=SURFACE, fg=TEXT_DARK,
                  font=F(11,"bold"), anchor="w").pack(anchor="w")
-        tk.Label(tb, text=preview or "", bg="white", fg=MUTE_GRAY,
+        tk.Label(tb, text=preview or "", bg=SURFACE, fg=MUTE_GRAY,
                  font=F(9), anchor="w").pack(anchor="w")
-        rt = tk.Frame(row, bg="white")
+        rt = tk.Frame(row, bg=SURFACE)
         rt.pack(side="right", padx=6)
         if not is_grp:
             tk.Label(rt, text="*", fg=ONLINE if online else OFFLINE,
@@ -353,7 +340,7 @@ class QQApp:
         if uc:
             tk.Label(rt, text=str(uc), fg="white", bg=RED,
                      font=F(8)).pack(anchor="e")
-        tk.Frame(self.ctc_inner, bg="#eee", height=1).pack(fill="x")
+        tk.Frame(self.ctc_inner, bg=SURFACE2, height=1).pack(fill="x")
         self._bind_tap(row, "<Button-1>",
                        lambda _, p=peer: self.open_chat(p))
 
@@ -364,11 +351,11 @@ class QQApp:
         f = tk.Frame(self.host, bg=LIST_BG)
         hdr = tk.Frame(f, bg=QQ_BLUE, height=HEADER_H)
         hdr.pack_propagate(False); hdr.pack(fill="x")
-        bk = tk.Label(hdr, text="<", fg="white", bg=QQ_BLUE,
+        bk = tk.Label(hdr, text="<", fg=ON_ACCENT, bg=ACCENT,
                       font=F(14,"bold"))
         bk.pack(side="left", padx=(6,4))
         bk.bind("<Button-1>", lambda e: self.show_contacts())
-        tk.Label(hdr, text="添加", fg="white", bg=QQ_BLUE,
+        tk.Label(hdr, text="添加", fg=ON_ACCENT, bg=ACCENT,
                  font=F(14,"bold")).pack(side="left")
         hdr.pack(fill="x")
         body = tk.Frame(f, bg=LIST_BG)
@@ -380,7 +367,8 @@ class QQApp:
             ("待接受的好友申请", "#e0a000", lambda: self._open_pending()),
         ]
         for label, color, cb in items:
-            b = tk.Label(body, text=label, fg="white", bg=color,
+            fg_on = ON_ACCENT if color == ACCENT else "white"
+            b = tk.Label(body, text=label, fg=fg_on, bg=color,
                          font=F(14,"bold"), height=2)
             b.pack(fill="x", pady=6)
             b.bind("<Button-1>", lambda e, c=cb: c())
@@ -396,29 +384,28 @@ class QQApp:
         f = tk.Frame(self.host, bg=LIST_BG)
         hdr = tk.Frame(f, bg=QQ_BLUE, height=HEADER_H)
         hdr.pack_propagate(False); hdr.pack(fill="x")
-        bk = tk.Label(hdr, text="<", fg="white", bg=QQ_BLUE,
+        bk = tk.Label(hdr, text="<", fg=ON_ACCENT, bg=ACCENT,
                       font=F(13))
         bk.pack(side="left", padx=(6,4))
         bk.bind("<Button-1>", lambda e: self.show_contacts())
-        tk.Label(hdr, text="添加好友", fg="white", bg=QQ_BLUE,
+        tk.Label(hdr, text="添加好友", fg=ON_ACCENT, bg=ACCENT,
                  font=F(13)).pack(side="left")
         hdr.pack(fill="x")
         body = tk.Frame(f, bg=LIST_BG)
         body.pack(fill="both", expand=True, padx=14, pady=8)
         self.af_st = tk.Label(body, text="", fg=RED, bg=LIST_BG, font=F(9))
         self.af_st.pack(fill="x", pady=(0,4))
-        lab = tk.Label(body, text="对方好友码", fg=MUTE_GRAY, bg="white",
+        lab = tk.Label(body, text="对方好友码", fg=MUTE_GRAY, bg=SURFACE,
                        font=F(11), anchor="w", padx=8)
         lab.pack(fill="x", pady=3); self.af_lbl = lab
         lab.bind("<Button-1>", lambda e: self.set_target("friendcode"))
-        ok = tk.Label(body, text="确定", fg="white", bg=QQ_BLUE,
+        ok = tk.Label(body, text="确定", fg=ON_ACCENT, bg=ACCENT,
                        font=F(13,"bold"), height=2)
         ok.pack(fill="x", pady=8)
         ok.bind("<Button-1>", lambda e: self._do_af())
         return f
 
     def _do_af(self):
-        self._commit_ime()
         code = self.fields["friendcode"].strip().upper()
         if not code: return self.af_st.config(text="请输入好友码")
         self.af_st.config(text="发送中...")
@@ -433,10 +420,10 @@ class QQApp:
         f = tk.Frame(self.host, bg=LIST_BG)
         hdr = tk.Frame(f, bg=QQ_BLUE, height=HEADER_H)
         hdr.pack_propagate(False); hdr.pack(fill="x")
-        bk = tk.Label(hdr, text="<", fg="white", bg=QQ_BLUE, font=F(13))
+        bk = tk.Label(hdr, text="<", fg=ON_ACCENT, bg=ACCENT, font=F(13))
         bk.pack(side="left", padx=(6,4))
         bk.bind("<Button-1>", lambda e: self.show_contacts())
-        tk.Label(hdr, text="待接受的好友申请", fg="white", bg=QQ_BLUE,
+        tk.Label(hdr, text="待接受的好友申请", fg=ON_ACCENT, bg=ACCENT,
                  font=F(13)).pack(side="left")
         hdr.pack(fill="x")
         self.pending_hint = tk.Label(f, text="", fg=MUTE_GRAY, bg=LIST_BG,
@@ -464,17 +451,17 @@ class QQApp:
             return
         self.pending_hint.config(text="以下用户申请加你为好友：")
         for ruid, r in self.pending.items():
-            row = tk.Frame(self.pending_inner, bg="white", height=58)
+            row = tk.Frame(self.pending_inner, bg=SURFACE, height=58)
             row.pack_propagate(False); row.pack(fill="x", pady=2)
             make_avatar(row, (r.get("username") or "?")[0], "#e0a000").pack(
                 side="left", padx=(8,6), pady=8)
-            tb = tk.Frame(row, bg="white")
+            tb = tk.Frame(row, bg=SURFACE)
             tb.pack(side="left", fill="both", expand=True, pady=6)
-            tk.Label(tb, text=r.get("username","") or "", bg="white",
+            tk.Label(tb, text=r.get("username","") or "", bg=SURFACE,
                      fg=TEXT_DARK, font=F(11,"bold"), anchor="w").pack(anchor="w")
-            tk.Label(tb, text="好友码: "+str(r.get("friend_code","")), bg="white",
+            tk.Label(tb, text="好友码: "+str(r.get("friend_code","")), bg=SURFACE,
                      fg=MUTE_GRAY, font=F(9), anchor="w").pack(anchor="w")
-            btnbox = tk.Frame(row, bg="white")
+            btnbox = tk.Frame(row, bg=SURFACE)
             btnbox.pack(side="right", padx=6)
             acc = tk.Label(btnbox, text="接受", fg="white", bg=ONLINE,
                            font=F(10,"bold"))
@@ -508,10 +495,10 @@ class QQApp:
         f = tk.Frame(self.host, bg=LIST_BG)
         hdr = tk.Frame(f, bg=QQ_BLUE, height=HEADER_H)
         hdr.pack_propagate(False); hdr.pack(fill="x")
-        bk = tk.Label(hdr, text="<", fg="white", bg=QQ_BLUE, font=F(13))
+        bk = tk.Label(hdr, text="<", fg=ON_ACCENT, bg=ACCENT, font=F(13))
         bk.pack(side="left", padx=(6,4))
         bk.bind("<Button-1>", lambda e: self.show_contacts())
-        tk.Label(hdr, text="我的好友码", fg="white", bg=QQ_BLUE,
+        tk.Label(hdr, text="我的好友码", fg=ON_ACCENT, bg=ACCENT,
                  font=F(13)).pack(side="left")
         hdr.pack(fill="x")
         body = tk.Frame(f, bg=LIST_BG)
@@ -519,7 +506,7 @@ class QQApp:
         tk.Label(body, text="把好友码发给好友，对方用添加好友即可加你",
                  fg=MUTE_GRAY, bg=LIST_BG, font=F(11), justify="center").pack(pady=(0,16))
         self.code_box = tk.Label(body, text="----", fg="#222222",
-                                 bg="white", font=F(26,"bold"), width=8,
+                                 bg=SURFACE, font=F(26,"bold"), width=8,
                                  height=2, relief="ridge", borderwidth=2)
         self.code_box.pack(fill="x", pady=10)
         self.code_hint = tk.Label(body, text="", fg=MUTE_GRAY, bg=LIST_BG,
@@ -544,11 +531,11 @@ class QQApp:
         f = tk.Frame(self.host, bg=LIST_BG)
         hdr = tk.Frame(f, bg=QQ_BLUE, height=HEADER_H)
         hdr.pack_propagate(False); hdr.pack(fill="x")
-        bk = tk.Label(hdr, text="<", fg="white", bg=QQ_BLUE,
+        bk = tk.Label(hdr, text="<", fg=ON_ACCENT, bg=ACCENT,
                       font=F(13))
         bk.pack(side="left", padx=(6,4))
         bk.bind("<Button-1>", lambda e: self.show_contacts())
-        tk.Label(hdr, text="创建群聊", fg="white", bg=QQ_BLUE,
+        tk.Label(hdr, text="创建群聊", fg=ON_ACCENT, bg=ACCENT,
                  font=F(13)).pack(side="left")
         hdr.pack(fill="x")
         body = tk.Frame(f, bg=LIST_BG)
@@ -557,7 +544,7 @@ class QQApp:
         self.cg_st.pack(fill="x", pady=(0,4))
         for txt, key in [("群名称","groupname"),
                          ("成员好友码(逗号分隔)","groupcodes")]:
-            lab = tk.Label(body, text=txt, fg=MUTE_GRAY, bg="white",
+            lab = tk.Label(body, text=txt, fg=MUTE_GRAY, bg=SURFACE,
                            font=F(11), anchor="w", padx=8)
             lab.pack(fill="x", pady=3)
             setattr(self, "cg_"+key[0]+"_lbl", lab)
@@ -569,7 +556,6 @@ class QQApp:
         return f
 
     def _do_cg(self):
-        self._commit_ime()
         name = self.fields["groupname"].strip() or "群聊"
         codes = [c.strip().upper() for c in self.fields["groupcodes"].split(",")
                  if c.strip()]
@@ -585,25 +571,25 @@ class QQApp:
         f = tk.Frame(self.host, bg=CHAT_BG)
         hdr = tk.Frame(f, bg=QQ_BLUE, height=HEADER_H)
         hdr.pack_propagate(False); hdr.pack(fill="x")
-        bk = tk.Label(hdr, text="<", fg="white", bg=QQ_BLUE, font=F(18))
+        bk = tk.Label(hdr, text="<", fg=ON_ACCENT, bg=ACCENT, font=F(18))
         bk.pack(side="left", padx=(6,0))
         bk.bind("<Button-1>", lambda e: self.show_contacts())
-        self.chat_title = tk.Label(hdr, text="", fg="white", bg=QQ_BLUE,
+        self.chat_title = tk.Label(hdr, text="", fg=ON_ACCENT, bg=ACCENT,
                                    font=F(13,"bold"))
         self.chat_title.pack(side="left", padx=4)
         hdr.pack(fill="x")
         self.msg_canvas = tk.Canvas(f, bg=CHAT_BG, highlightthickness=0)
         self.msg_canvas.pack(fill="both", expand=True)
         self._bind_scroll(self.msg_canvas)
-        ibar = tk.Frame(f, height=34, bg="#f0f0f0")
+        ibar = tk.Frame(f, height=34, bg=SURFACE2)
         ibar.pack_propagate(False); ibar.pack(fill="x")
         self.draft_label = tk.Label(ibar, text="输入消息…", fg=MUTE_GRAY,
-                                    bg="#fff", font=F(10), anchor="w", padx=6)
+                                    bg=SURFACE, font=F(10), anchor="w", padx=6)
         self.draft_label.pack(side="left", fill="both", expand=True,
                                padx=(6,4), pady=4)
         self.draft_label.bind("<Button-1>",
                               lambda e: self.set_target("draft"))
-        snd = tk.Label(ibar, text="发送", fg="white", bg=QQ_BLUE,
+        snd = tk.Label(ibar, text="发送", fg=ON_ACCENT, bg=ACCENT,
                        font=F(11,"bold"), width=5)
         snd.pack(side="right", padx=(0,6), pady=4)
         snd.bind("<Button-1>", lambda e: self.send_message())
@@ -620,7 +606,6 @@ class QQApp:
         self.render_msgs()
 
     def send_message(self):
-        self._commit_ime()
         t = self.draft.strip()
         if not t or self.current is None: return
         peer = self.current
@@ -633,137 +618,12 @@ class QQApp:
         self.draft = ""; self.render_msgs(); self._refresh_display()
 
     # ================================================================
-    #  屏幕键盘 —— grid 矩阵布局（每个按键都是真实可见的 Button）
-    # ================================================================
-    def _build_keys(self):
-        """构建/重建所有按键，使用 grid 布局到 keys_frame"""
-        # 清除旧按键
-        for w in self.keys_frame.grid_slaves():
-            w.destroy()
-
-        ime_tag = "中" if self.ime_on else "EN"
-
-        if self.kb_mode == "abc":
-            # 4 行布局 —— 压缩到能在 320px 屏幕内显示
-            rows_data = [
-                list("qwertyuiop"),
-                list("asdfghjkl;"),
-                ["^"] + list("zxcvbnm,.") + ["<-"],
-                [ime_tag, "123", " ", ".", "<-", ">"],
-            ]
-        else:
-            # 数字/符号模式 —— 3 行更紧凑
-            rows_data = [
-                list("1234567890"),
-                list("-_@#!$%&*()"),
-                [ime_tag, "abc", " ", ".", "<-", ">"],
-            ]
-
-        for ri, row_data in enumerate(rows_data):
-            n_cols = len(row_data)
-            for ci, k in enumerate(row_data):
-                btn = self._make_key_button(k)
-                btn.grid(row=ri, column=ci, sticky="nsew", padx=1, pady=1)
-                # 让每列等宽
-                self.keys_frame.columnconfigure(ci, weight=1, uniform="key")
-
-        # 让每行等高
-        for ri in range(len(rows_data)):
-            self.keys_frame.rowconfigure(ri, weight=1, uniform="key")
-
-    def _make_key_button(self, k):
-        """创建单个按键按钮（返回一个 tk.Button 或 tk.Label）"""
-        # ---- 决定外观 ----
-        if k == "<":
-            disp = "<-"
-            bg_c, fg_c = "#ddd", TEXT_DARK
-            ft = F(KEY_FONT_SIZE)
-        elif k == "^":
-            disp = "^"; bg_c, fg_c = "#ddd", TEXT_DARK; ft = F(KEY_FONT_SIZE)
-        elif k == ">":
-            disp = "↵"   # 回车/确认（上下文感知：聊天=发送，登录=登录，加好友=确定，建群=创建）
-            bg_c, fg_c = QQ_BLUE, "white"; ft = F(KEY_FONT_SIZE, "bold")
-        elif k in ("中", "EN"):
-            disp = k
-            bg_c = "#a8d4ff" if self.ime_on else "#e0e0e0"
-            fg_c = "#0044aa"; ft = F(KEY_FONT_SIZE, "bold")
-        elif k in ("123", "abc"):
-            disp = k; bg_c, fg_c = "#ddd", TEXT_DARK; ft = F(9)
-        elif k == " ":
-            disp = "空格"; bg_c, fg_c = "#eee", TEXT_DARK; ft = F(KEY_FONT_SIZE)
-        elif k == ".":
-            disp = "."; bg_c, fg_c = "#eee", TEXT_DARK; ft = F(KEY_FONT_SIZE)
-        else:
-            # 字母/数字
-            disp = k.upper() if (self.caps and k.isalpha()) else k
-            bg_c, fg_c = KEY_BG, KEY_FG; ft = F(KEY_FONT_SIZE)
-
-        btn = tk.Button(
-            self.keys_frame,
-            text=disp,
-            bg=bg_c, fg=fg_c, font=ft,
-            activebackground="#ccc", activeforeground=TEXT_DARK,
-            relief="raised", bd=1,
-            highlightthickness=0,
-            padx=2, pady=2,
-        )
-        btn.bind("<Button-1>", lambda ev, kk=k: self._key_press(kk))
-        return btn
-
-    def _key_press(self, ch):
-        if ch == "<":
-            # 退格
-            if self.ime_on and self.ime_py:
-                self.ime_py = self.ime_py[:-1]
-                self._render_cands()
-            else:
-                self._del_char()
-        elif ch == " ":
-            # 空格
-            if self.ime_on and self.ime_py:
-                if self.ime_cands:
-                    self._commit(self.ime_cands[0])
-                else:
-                    self._type(self.ime_py); self.ime_py=""
-                    self._render_cands()
-            else:
-                self._type(" ")
-        elif ch == ">":
-            # 回车/确认（上下文感知，见 _confirm）
-            self._confirm()
-        elif ch == "123":
-            self.kb_mode = "123"; self._build_keys()
-        elif ch == "abc":
-            self.kb_mode = "abc"; self._build_keys()
-        elif ch == "^":
-            self.caps = not self.caps; self._build_keys()
-        elif ch in ("中", "EN"):
-            self._commit_ime()       # 切中文/英文前先把未选拼音提交，避免丢字
-            self.ime_on = not self.ime_on
-            self.ime_py = ""
-            self._render_cands()
-            self._build_keys()
-        elif ch == "<-":
-            # 退格键 → 删除最后一个字符
-            if self.ime_py:
-                self.ime_py = self.ime_py[:-1]
-                self._render_cands()
-            else:
-                self._del_char()
-        else:
-            ascii_field = self.input_target in ("friendcode", "groupcodes")
-            if self.ime_on and self.kb_mode=="abc" and len(ch)==1 and ch.isalpha() and not ascii_field:
-                self.ime_py += ch.lower()
-                self._render_cands()
-            else:
-                self._type(ch)
-        self._refresh_display()
-
     def _type(self, ch):
         if self.input_target == "draft":
             self.draft += ch
         elif self.input_target:
             self.fields[self.input_target] += ch
+        self._refresh_display()
 
     def _del_char(self):
         if self.input_target == "draft":
@@ -771,22 +631,10 @@ class QQApp:
         elif self.input_target:
             self.fields[self.input_target] = \
                 self.fields[self.input_target][:-1]
-
-    def _commit(self, char):
-        self._type(char); self.ime_py = ""; self._render_cands()
-
-    def _commit_ime(self):
-        """把当前未确认的拼音缓冲提交进输入框（有候选取第一个，否则原样提交）。"""
-        if self.ime_py:
-            if self.ime_cands:
-                self._commit(self.ime_cands[0])
-            else:
-                self._type(self.ime_py); self.ime_py = ""
-                self._render_cands()
+        self._refresh_display()
 
     def _confirm(self):
-        """回车/确认键（↵）：先提交残留拼音，再按当前页面触发对应动作。"""
-        self._commit_ime()
+        """回车/确认键（↵）：按当前页面触发对应动作（键盘由行空OS组件提供）。"""
         page = self.current_page
         if self.input_target == "draft":
             self.send_message()
@@ -798,42 +646,10 @@ class QQApp:
             self._do_cg()
 
     # ================================================================
-    #  候选条渲染
-    # ================================================================
-    def _render_cands(self):
-        for w in self.cand_bar.winfo_children(): w.destroy()
-        if self.ime_on and self.ime_py:
-            cs = PINYIN.get(self.ime_py, [])
-            self.ime_cands = cs[:8]
-            if cs:
-                for c in self.ime_cands:
-                    b = tk.Button(self.cand_bar, text=c, bg="#fff",
-                                  fg=TEXT_DARK, font=F(13,"bold"),
-                                  relief="raised", bd=1, padx=5, pady=1)
-                    b.pack(side="left", padx=1, pady=1)
-                    b.bind("<Button-1>",
-                           lambda e, ch=c: self._commit(ch))
-            else:
-                tk.Label(self.cand_bar,
-                         text='无匹配: "%s"' % self.ime_py,
-                         bg="#ffe0e0", fg=RED, font=F(9)).pack(
-                             side="left", padx=3)
-        else:
-            self.ime_cands = []
-            hint = "中文模式：打拼音出汉字" if self.ime_on else "英文直输模式"
-            tk.Label(self.cand_bar, text=hint, bg="#e8ecf4",
-                     fg=TEXT_DARK, font=F(9,"bold")).pack(side="left", padx=4)
-
-    # ================================================================
     #  输入焦点 & 显示刷新
     # ================================================================
     def set_target(self, target):
-        self._commit_ime()   # 切到别的输入框前，先把未确认的拼音提交，避免丢字
         self.input_target = target
-        # 纯 ASCII 字段（IP/用户名/密码/好友码/群码）强制英文模式，避免拼音吞掉字母
-        if target in ("serverip", "username", "password",
-                      "friendcode", "groupcodes"):
-            self.ime_on = False
         self._highlight(target)
         self._refresh_display()
 
@@ -849,9 +665,9 @@ class QQApp:
         for k, lbl in m.items():
             if not lbl: continue
             if k == target:
-                lbl.config(bg="#d6ebff", fg=TEXT_DARK)
+                lbl.config(bg=HOVER, fg=TEXT_DARK)
             else:
-                lbl.config(bg="white", fg=MUTE_GRAY)
+                lbl.config(bg=SURFACE, fg=MUTE_GRAY)
 
     def _refresh_display(self):
         f = self.fields
@@ -880,29 +696,6 @@ class QQApp:
                 fg=TEXT_DARK if self.draft else MUTE_GRAY)
 
         self._refresh_mycode()
-
-        if getattr(self, "kb_draft_lbl", None):
-            # 当前输入框中文名，让提示一眼看清在填哪个字段
-            field_names = {
-                "serverip":   "IP",
-                "username":   "用户名",
-                "password":   "密码",
-                "friendcode": "好友码",
-                "groupname":  "群名",
-                "groupcodes": "成员码",
-                "draft":      "消息",
-            }
-            tgt = (self.draft if self.input_target=="draft"
-                   else f.get(self.input_target,"") if self.input_target else "")
-            field_label = field_names.get(self.input_target, "")
-            py_part = (self.ime_py+"|") if (self.ime_on and self.ime_py) else ""
-            mode = "[中]" if self.ime_on else "[EN]"
-            if self.input_target == "password" and tgt:
-                shown = "*"*len(tgt)   # 密码用圆点隐藏
-            else:
-                shown = tgt
-            hint = f"{mode} {field_label}: {py_part}{shown}" if field_label else f"{mode} {py_part}{shown}"
-            self.kb_draft_lbl.config(text=hint)
 
     # ================================================================
     #  消息气泡
@@ -1087,20 +880,11 @@ class QQApp:
         def onk(e):
             if not self.input_target: return
             if e.keysym=="Return":
-                self._confirm()
-                return
+                self._confirm(); return
             if e.keysym=="BackSpace":
                 self._del_char(); self._refresh_display(); return
-            if e.keysym=="space":
-                if self.ime_on and self.ime_py:
-                    if self.ime_cands: self._commit(self.ime_cands[0])
-                    else: self._type(self.ime_py);self.ime_py="";self._render_cands()
-                else: self._type(" ")
-                self._refresh_display(); return
+            if e.keysym in ("space", " "):
+                self._type(" "); self._refresh_display(); return
             if len(e.char)==1 and e.char.isprintable():
-                if self.ime_on and e.char.isalpha():
-                    self.ime_py+=e.char.lower();self._render_cands()
-                else:
-                    self._type(e.char)
-                self._refresh_display()
+                self._type(e.char); self._refresh_display()
         self.root.bind("<Key>", onk)
