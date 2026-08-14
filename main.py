@@ -42,6 +42,7 @@ import videoplayer
 import gamecenter
 import pincontrol
 import composer
+import player
 # 机械臂控制为本地可选模块：本地有 armcontrol.py 则显示入口，
 # 远程仓库（GitHub）通过 .gitignore 排除该文件，导入失败时自动隐藏，不崩溃。
 try:
@@ -107,7 +108,7 @@ class Launcher:
             ("video", "视频播放", DANGER, self._spawn_video),
             ("game", "游戏中心", "#9b5de5", self._spawn_games),
             ("pin", "引脚控制", "#2ec4b6", self._spawn_pins),
-            ("music", "编曲", "#f4a261", self._spawn_composer),
+            ("music", "音乐", ACCENT2, self._spawn_music),
             ("qq", "QQ", ACCENT, self._spawn_qq),
         ]
         # 机械臂为本地可选模块，仅当 armcontrol 可导入时才加入九宫格
@@ -400,6 +401,12 @@ class Launcher:
 
     def _spawn_pins(self):
         spawn_window(self.root, self._open_pincontrol, None)
+
+    def _spawn_music(self):
+        spawn_window(self.root, self._open_music, None)
+
+    def _open_music(self):
+        return player.MusicPlayer(self.root)
 
     def _spawn_composer(self):
         spawn_window(self.root, self._open_composer, None)
