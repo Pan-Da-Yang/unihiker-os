@@ -91,6 +91,8 @@ class PinControl(tk.Toplevel):
         self._bz_stop_id = None
         self._bz_redirected = False
         self._toast_id = None
+        self._pwm_obj = None      # 独立 PWM 控制台当前对象
+        self._pwm_pin = None      # 当前占用 PWM 控制台的引脚
 
         self._build_ui()
         self._bind_board_key()
@@ -107,7 +109,7 @@ class PinControl(tk.Toplevel):
         bar = tk.Frame(self, bg=SURFACE)
         bar.pack(fill=tk.X)
         px = 2 if BOARD else 4
-        ttk.Button(bar, text="返回", command=lambda: self.destroy(),
+        ttk.Button(bar, text="返回", command=self._safe_close,
                    style="UH.Danger.TButton").pack(side=tk.LEFT, padx=px, pady=4)
         tk.Label(bar, text="引脚控制", bg=SURFACE, fg=TEXT,
                  font=FONT_NORMAL).pack(side=tk.LEFT, padx=2)
@@ -117,6 +119,9 @@ class PinControl(tk.Toplevel):
 
         # ---- 蜂鸣器控制台 (P0) ----
         self._build_buzzer()
+
+        # ---- PWM 模拟输出控制台 ----
+        self._build_pwm()
 
         # ---- 引脚列表 (P0–P20，可滚动) ----
         self._build_pin_list()
@@ -178,6 +183,176 @@ class PinControl(tk.Toplevel):
         for name, hz in _NOTES:
             ttk.Button(rnote, text=name, command=lambda h=hz: self._bz_preset(h),
                        style="UH.Num.TButton").pack(side=tk.LEFT, padx=1, expand=True, fill=tk.X)
+
+    # ============ PWM 模拟输出控制台（独立面板） ============
+    def _build_pwm(self):
+        f = tk.LabelFrame(self, text="PWM 模拟输出", bg=SURFACE, fg=ACCENT2,
+                          font=FONT_SMALL, relief=tk.FLAT, bd=1, highlightthickness=0)
+        f.pack(fill=tk.X, padx=6, pady=(4, 2))
+
+        self.pwm_idx = tk.IntVar(value=2)
+        self.pwm_freq = tk.IntVar(value=1000)
+        self.pwm_duty = tk.IntVar(value=0)
+        self._pwm_pins = sorted(_PWM_PINS)  # 不含 P0（蜂鸣器专用）
+
+        # 引脚选择行
+        rp = tk.Frame(f, bg=SURFACE)
+        rp.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Button(rp, text="−", width=3,
+                   command=lambda: self._pwm_console_pin(-1),
+                   style="UH.Num.TButton").pack(side=tk.LEFT, padx=2)
+        self.pwm_pin_lbl = tk.Label(rp, text="P2", bg=SURFACE, fg=TEXT,
+                                    font=FONT_SMALL, width=5, anchor=tk.CENTER)
+        self.pwm_pin_lbl.pack(side=tk.LEFT, padx=2)
+        ttk.Button(rp, text="+", width=3,
+                   command=lambda: self._pwm_console_pin(1),
+                   style="UH.Num.TButton").pack(side=tk.LEFT, padx=2)
+        tk.Label(rp, text="引脚", bg=SURFACE, fg=MUTED,
+                 font=FONT_SMALL).pack(side=tk.LEFT, padx=2)
+
+        # 频率行
+        rf = tk.Frame(f, bg=SURFACE)
+        rf.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Button(rf, text="−", width=3,
+                   command=lambda: self._pwm_console_freq(-100),
+                   style="UH.Num.TButton").pack(side=tk.LEFT, padx=2)
+        self.pwm_freq_lbl = tk.Label(rf, text="1000 Hz", bg=SURFACE, fg=TEXT,
+                                     font=FONT_SMALL, width=8, anchor=tk.CENTER)
+        self.pwm_freq_lbl.pack(side=tk.LEFT, padx=2)
+        ttk.Button(rf, text="+", width=3,
+                   command=lambda: self._pwm_console_freq(100),
+                   style="UH.Num.TButton").pack(side=tk.LEFT, padx=2)
+        tk.Label(rf, text="频率", bg=SURFACE, fg=MUTED,
+                 font=FONT_SMALL).pack(side=tk.LEFT, padx=2)
+
+        # 占空比行
+        rd = tk.Frame(f, bg=SURFACE)
+        rd.pack(fill=tk.X, padx=4, pady=2)
+        ttk.Button(rd, text="−", width=3,
+                   command=lambda: self._pwm_console_duty(-5),
+                   style="UH.Num.TButton").pack(side=tk.LEFT, padx=2)
+        self.pwm_duty_lbl = tk.Label(rd, text="0%", bg=SURFACE, fg=TEXT,
+                                     font=FONT_SMALL, width=6, anchor=tk.CENTER)
+        self.pwm_duty_lbl.pack(side=tk.LEFT, padx=2)
+        ttk.Button(rd, text="+", width=3,
+                   command=lambda: self._pwm_console_duty(5),
+                   style="UH.Num.TButton").pack(side=tk.LEFT, padx=2)
+        ttk.Button(rd, text="输出", command=self._pwm_console_apply,
+                   style="UH.TButton").pack(side=tk.RIGHT, padx=2)
+        ttk.Button(rd, text="停止", command=self._pwm_console_release,
+                   style="UH.Danger.TButton").pack(side=tk.RIGHT, padx=2)
+
+    # ============ PWM 控制台逻辑 ============
+    def _pwm_console_obj(self):
+        if not self.hw:
+            return None
+        idx = self.pwm_idx.get()
+        const = _pin_const(idx)
+        if const is None:
+            return None
+        pin_cls = _PP.get("Pin")
+        pwm_cls = _PP.get("PWM")
+        try:
+            if self._pwm_obj is None or self._pwm_pin != idx:
+                self._pwm_console_release()
+                self._pwm_obj = pwm_cls(pin_cls(const))
+                self._pwm_pin = idx
+            return self._pwm_obj
+        except Exception as e:
+            self._toast("PWM 控制台 P%d 初始化失败：%s" % (idx, e))
+            return None
+
+    def _pwm_console_pin(self, d):
+        i = self._pwm_pins.index(self.pwm_idx.get())
+        i = (i + d) % len(self._pwm_pins)
+        self.pwm_idx.set(self._pwm_pins[i])
+        self.pwm_pin_lbl.config(text="P%d" % self._pwm_pins[i])
+        if self._pwm_obj is not None:
+            self._pwm_console_release()
+            self._pwm_console_apply()
+
+    def _pwm_console_freq(self, d):
+        v = max(1, min(65535, self.pwm_freq.get() + d))
+        self.pwm_freq.set(v)
+        self.pwm_freq_lbl.config(text="%d Hz" % v)
+        if self._pwm_obj is not None:
+            try:
+                self._pwm_obj.freq(v)
+            except Exception as e:
+                self._toast("PWM 频率设置失败：%s" % e)
+
+    def _pwm_console_duty(self, d):
+        v = max(0, min(100, self.pwm_duty.get() + d))
+        self.pwm_duty.set(v)
+        self.pwm_duty_lbl.config(text="%d%%" % v)
+        if self._pwm_obj is not None:
+            self._pwm_console_apply()
+
+    def _pwm_console_apply(self):
+        if not self.hw:
+            self._toast("当前环境未检测到 pinpong / 行空板硬件", color=MUTED)
+            return
+        obj = self._pwm_console_obj()
+        if obj is None:
+            return
+        try:
+            obj.freq(self.pwm_freq.get())
+            val = int(self.pwm_duty.get() / 100.0 * 1023)
+            try:
+                obj.write_analog(val)
+            except Exception:
+                obj.duty(val)
+            self._toast("P%d 输出 %d%% @ %dHz" % (
+                self.pwm_idx.get(), self.pwm_duty.get(), self.pwm_freq.get()), ACCENT)
+        except Exception as e:
+            self._toast("PWM 输出失败：%s" % e)
+
+    def _pwm_console_release(self):
+        if self._pwm_obj is not None:
+            try:
+                self._pwm_obj.write_analog(0)  # 关输出
+            except Exception:
+                try:
+                    self._pwm_obj.duty(0)
+                except Exception:
+                    pass
+            for meth in ("detach", "deinit", "stop"):
+                fn = getattr(self._pwm_obj, meth, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+            self._pwm_obj = None
+        self._pwm_pin = None
+
+    def _pwm_freq_step(self, idx, d):
+        p = self.pins[idx]
+        if p["mode"] != "pwm" or p["obj"] is None or p.get("freq_lbl") is None:
+            return
+        f = max(1, min(65535, p["freq"] + d))
+        p["freq"] = f
+        try:
+            p["obj"].freq(f)
+        except Exception as e:
+            self._toast("PWM P%d 频率设置失败：%s" % (idx, e))
+            return
+        p["freq_lbl"].config(text="%dHz" % f)
+
+    # ============ 安全关闭（释放 PWM 控制台与蜂鸣器） ============
+    def _safe_close(self):
+        try:
+            self._pwm_console_release()
+        except Exception:
+            pass
+        try:
+            self._bz_stop()
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
 
     def _build_pin_list(self):
         outer = tk.Frame(self, bg=BG)
@@ -362,10 +537,11 @@ class PinControl(tk.Toplevel):
     def _close_obj(self, p):
         obj = p.get("obj")
         if obj is not None:
-            # 舵机：切走前务必释放 PWM 通道，否则同引脚再建 PWM 会抢通道死锁
-            if p.get("mode") == "servo":
+            mode = p.get("mode")
+            # 舵机 / PWM：切走前务必释放 PWM 通道，否则同引脚再建会抢通道死锁
+            if mode in ("servo", "pwm"):
                 try:
-                    obj.write_angle(90)  # 先回中，避免舵机停在极端角
+                    obj.write_analog(0)  # 先关输出，避免停在极端占空比/角度
                 except Exception:
                     pass
                 for meth in ("detach", "deinit", "stop"):
@@ -375,6 +551,11 @@ class PinControl(tk.Toplevel):
                             fn()
                         except Exception:
                             pass
+            elif mode == "servo":
+                try:
+                    obj.write_angle(90)  # 舵机回中
+                except Exception:
+                    pass
             try:
                 del p["obj"]
             except Exception:
@@ -395,7 +576,7 @@ class PinControl(tk.Toplevel):
         self._close_obj(p)
         for c in list(p["ctrl"].winfo_children()):
             c.destroy()
-        p["read_lbl"] = p["angle_lbl"] = p["duty_lbl"] = None
+        p["read_lbl"] = p["angle_lbl"] = p["duty_lbl"] = p["freq_lbl"] = None
 
         if mode == "none":
             p["mode"] = "none"
@@ -456,13 +637,24 @@ class PinControl(tk.Toplevel):
             elif mode == "pwm":
                 pwm_cls = _PP.get("PWM")
                 p["obj"] = pwm_cls(const)
+                p["freq"] = 1000
+                p["duty"] = 0
+                p["mode"] = "pwm"
                 try:
                     p["obj"].freq(1000)  # 默认 1kHz，适合调光/控速
                 except Exception:
                     pass
-                p["duty"] = 0
-                p["mode"] = "pwm"
                 p["mode_btn"].config(text="模拟出")
+                ttk.Button(p["ctrl"], text="−", width=3,
+                           command=lambda i=idx: self._pwm_freq_step(i, -100),
+                           style="UH.Num.TButton").pack(side=tk.LEFT, padx=1)
+                fl = tk.Label(p["ctrl"], text="1kHz", bg=BG, fg=TEXT,
+                              font=FONT_SMALL, width=6, anchor=tk.CENTER)
+                fl.pack(side=tk.LEFT, padx=1)
+                p["freq_lbl"] = fl
+                ttk.Button(p["ctrl"], text="+", width=3,
+                           command=lambda i=idx: self._pwm_freq_step(i, 100),
+                           style="UH.Num.TButton").pack(side=tk.LEFT, padx=1)
                 ttk.Button(p["ctrl"], text="−", width=3,
                            command=lambda i=idx: self._pwm_step(i, -5),
                            style="UH.Num.TButton").pack(side=tk.LEFT, padx=1)
@@ -515,11 +707,15 @@ class PinControl(tk.Toplevel):
         p = self.pins[idx]
         if p["obj"] is None:
             return
+        # pinpong PWM 占空比范围 0–1023（10-bit）；duty 也可用 duty(i)
+        val = int(p.get("duty", 0) / 100.0 * 1023)
         try:
-            # pinpong PWM 占空比范围 0–255
-            p["obj"].write_analog(int(p["duty"] / 100.0 * 255))
-        except Exception as e:
-            self._toast("PWM P%d 写入失败：%s" % (idx, e))
+            p["obj"].write_analog(val)
+        except Exception:
+            try:
+                p["obj"].duty(val)
+            except Exception as e:
+                self._toast("PWM P%d 写入失败：%s" % (idx, e))
 
     def _pwm_step(self, idx, d):
         p = self.pins[idx]
@@ -589,10 +785,10 @@ class PinControl(tk.Toplevel):
             pass
 
     def _on_a(self, pin):
-        # 回调在子线程触发，切回主线程销毁窗口
+        # 回调在子线程触发，切回主线程销毁窗口（先释放 PWM 控制台）
         try:
             if self.winfo_exists():
-                self.after(0, lambda: self.destroy())
+                self.after(0, self._safe_close)
         except Exception:
             pass
 
